@@ -81,11 +81,28 @@ def _lazy_register_run():
     return run_app
 
 
+def _lazy_register_audit():
+    """Lazily import and register audit sub-command group."""
+    from expflow.cli_audit import audit_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "audit":
+            return audit_app
+
+    app.add_typer(
+        audit_app,
+        name="audit",
+        help="Experiment validation, compliance checking, report generation",
+    )
+    return audit_app
+
+
 # Call at module level to register sub-command groups
 _ = _lazy_register_clearml()
 _ = _lazy_register_optuna()
 _ = _lazy_register_langfuse()
 _ = _lazy_register_run()
+_ = _lazy_register_audit()
 
 
 @app.callback()
