@@ -3,9 +3,13 @@
 > **设计决策：** 放弃 DVC，改用 ClearML Server 内置的 Fileserver
 > 作为 Agentic4Sci 的唯一实验数据层。
 >
-> **调研验证：** 经 clearml-data 官方文档（576 篇 .md）全面学习，验证设计方向完全正确。
+> **调研验证：** 经 clearml 官方文档（576 篇 .md）全面学习，验证设计方向完全正确。
 > clearml 的 Dataset class (`clearml-data`) 提供了版本管理、血缘追踪、
 > 差异化存储、缓存机制、元数据标注，与 expflow 数据层需求高度一致。
+>
+> **实现状态：** clearml-data CLI + SDK 已就绪（clearml 包自带，无需额外安装）。
+> expflow Phase 7（dataset_upload/download/lineage 封装）规划中。
+> 前提：需先部署 clearml-server（docker compose port 8082）。
 
 ---
 

@@ -4,26 +4,51 @@
 
 ## Vision
 
-expflow bridges PDEBench experiments with ML experiment management systems (clearml,
-optuna, langfuse) via CLI and MCP interfaces. It provides:
+expflow is the **measurement-plane unified interface** for the Agent4PDE three-plane architecture.
+It bridges PDEBench experiments with clearml (experiment tracking), clearml-data (dataset versioning),
+optuna (HPO), and langfuse (observability) via CLI and MCP interfaces.
 
-1. **Experiment dispatch** — launch, track, cancel experiments across distributed workers
-2. **Hyperparameter optimization** — clearml-native + optuna backend integration
-3. **Dataset & model management** — upload, version, lineage, compliance via clearml Fileserver
+### What expflow provides:
+
+1. **Experiment dispatch & tracking** — launch, track, cancel experiments via clearml
+2. **Hyperparameter optimization** — optuna backend integration + clearml Task tracking
+3. **Dataset & model management** — upload, version, lineage, compliance via clearml-data
 4. **Compliance auditing** — competition-legal dataset verification, provenance chain check
 5. **Agent-friendly MCP tools** — read/write experiment metadata, query optimization studies
 
+### What expflow does NOT do (leverages clearml native):
+
+| Not needed | Because |
+|-----------|---------|
+| Data file transfer / hash / chunking | clearml-data SDK handles all of it |
+| Job scheduling / queue management | clearml-agent daemon is production-ready |
+| Pipeline orchestration | clearml PipelineController covers it |
+| Task init / auto-logging | `Task.init()` is one line of code |
+| Step caching / parallel execution | clearml Pipeline does it natively |
+
+expflow's **real value** is in the gaps clearml doesn't fill:
+- Competition compliance annotation & audit
+- Unified CLI (clearml + optuna + langfuse + audit)
+- Hermes MCP tool integration
+- Dataset lineage + compliance provenance chain
+
+---
+
 ## Data Layer — Design Decision
 
-**Clearl ML Fileserver（内置）替代 DVC + 独立 MinIO**，详见 [docs/data_layer_design.md](docs/data_layer_design.md)。
+**ClearlML Fileserver（内置）替代 DVC + 独立 MinIO**，详见 [docs/data_layer_design.md](docs/data_layer_design.md)。
 
 核心理由：
-- clearml-server docker compose 已内置 fileserver（基于文件系统的 MinIO 兼容存储）
-- `clearml.Dataset` 类原生提供版本管理、血缘追踪、元数据标注
-- Hermes Agent 通过 expflow MCP 直接调用 clearml API，无需额外 DVC CLI wrapper
-- 实验数据自动随 Task 记录，无需手动 `dvc push`
+- clearml-data（`clearml.Dataset` class）是 DVC 的超集：版本管理+血缘追踪+差异化存储+自动缓存
+- 与 clearml Task 原生集成——训练脚本自动记录 Dataset ID
+- Hermes Agent 通过 expflow MCP 直接调 clearml-data API
+- 详见 [~/wiki/clearml/clearml_data_vs_dvc.md](~/wiki/clearml/clearml_data_vs_dvc.md)
 
-## Status — 98 tests, 6 CLI command groups, 5 phases complete
+---
+
+## Status — 98 tests, 7 CLI command groups, 6 phases complete, 2 phases planned
+
+### CLI Tree
 
 ```
 expflow [OPTIONS] COMMAND
@@ -41,7 +66,7 @@ expflow [OPTIONS] COMMAND
     dequeue            Dequeue a task
     queues             List all available queues
     compare            Compare two or more tasks
-    dataset-register   Register a PDEBench dataset with compliance annotation
+    dataset-register   Register a dataset with compliance annotation [metadata-only]
     dataset-list       List registered datasets with compliance info
     dataset-upload     Upload dataset to clearml Fileserver [PLANNED]
     dataset-download   Download dataset from clearml Fileserver [PLANNED]
@@ -83,6 +108,10 @@ expflow [OPTIONS] COMMAND
     board              Launch clearml compare board
 ```
 
+34 sub-commands across 7 command groups, 5 top-level commands.
+
+---
+
 ## Test Coverage
 
 | Package | Tests | Scope |
@@ -92,8 +121,11 @@ expflow [OPTIONS] COMMAND
 | expflow.langfuse | 10 unit | Trace list/get, cost, sessions, metrics |
 | expflow.dispatcher | 9 unit | Experiment submit/list/status/cancel |
 | expflow.audit | 13 unit | Validation, compliance check, report |
-| CLI (CliRunner) | 21 | All 6 command groups + entry point subprocess |
+| CLI (CliRunner) | 21 | All 7 command groups + entry point subprocess |
+| System tests | 6 | status/board/mcp/init/config + edge cases |
 | **Total** | **98 tests, all pass** | `ruff` 0 errors, 9 commits |
+
+---
 
 ## Implementation Phases
 
@@ -134,22 +166,39 @@ expflow [OPTIONS] COMMAND
 - [x] `expflow/mcp.py` — MCP server stub
 - [x] `expflow/system.py` — health check, tensorboard launch
 - [x] `AGENTS.md` — Hermes Agent Usage Guide (4 scenarios + MCP ref)
-- [x] `docs/data_layer_design.md` — clearml Fileserver 数据层设计
+- [x] `docs/data_layer_design.md` — clearml Fileserver 数据层设计（clearml 官方文档调研后更新）
 
-### Phase 7 — Data Layer: clearml Fileserver Upload/Download [PLANNED]
-- [ ] `clearml.dataset_upload()` — upload local HDF5 to Fileserver
-- [ ] `clearml.dataset_download()` — download from Fileserver with MD5 check
-- [ ] `clearml.dataset_lineage()` — trace parent chain
-- [ ] `clearml.model_list()` / `model_upload()`
+### Phase 7 — Data Layer: clearml-data Dataset API [PLANNED]
+- [ ] `clearml.dataset_upload()` — upload local HDF5 to Fileserver (wraps clearml Dataset.create+add_files+upload+finalize)
+- [ ] `clearml.dataset_download()` — download from Fileserver (wraps Dataset.get+get_mutable_local_copy)
+- [ ] `clearml.dataset_lineage()` — recursive parent chain (wraps Dataset.get(id).parent)
+- [ ] `clearml.model_list()` / `model_upload()` — Model.query_models + InputModel/OutputModel
 - [ ] CLI subcommands: dataset-upload/download/lineage, model-list/upload
-- [ ] Tests: 15+ unit tests (mocked clearml SDK Dataset API)
+- [ ] Tests: 15+ unit (mocked clearml Dataset API)
 - [ ] MCP tools: dataset_upload/download/list/lineage, model_list/upload
+- [ ] Old `register_dataset()` → `annotate_compliance()` refactor
 
-### Phase 8 — End-to-End Integration & Deployment [PLANNED]
-- [ ] Deploy clearml-server (port 8082:80)
-- [ ] Real integration tests vs clearml + fileserver
-- [ ] End-to-end experiment: Hermes → expflow → clearml → fileserver loop
-- [ ] Multi-GPU task scheduling with clearml queue management
+**Prerequisite:** clearml-server must be deployed first. clearml-data requires an active apiserver.
+
+### Phase 8 — Pipeline Integration (clearml Pipeline) [PLANNED]
+- [ ] clearml PipelineController encapsulation for train → validate workflows
+- [ ] Automatic dataset ID injection into pipeline parameters
+- [ ] Compliance check step injection
+- [ ] MCP tools: pipeline_submit / list / status
+
+---
+
+## Design Decisions
+
+| Decision | Date | Reason |
+|----------|------|--------|
+| Use clearml-data instead of DVC | 2026-05-13 | clearml-data is DVC's superset; no extra MinIO; natively integrated with Task/Model |
+| Use clearml SDK, not clearml-mcp | 2026-05-13 | clearml-mcp is read-only; expflow needs write access (create/run/enqueue) |
+| Use clearml Pipeline over native dispatcher | 2026-05-13 | PipelineController already handles DAG/caching/parallelism |
+| dataset_upload wraps clearml SDK (not reimplement) | 2026-05-13 | clearml-data handles hash/chunk/cache natively; 20 lines vs 100 lines |
+| clearml automatically captures TensorBoardX | 2026-05-13 | Zero-code integration — Task.init() before PyTorch import is all needed |
+
+---
 
 ## Stretch Goals (not implemented)
 
@@ -157,3 +206,4 @@ expflow [OPTIONS] COMMAND
 - Langfuse <-> clearml trace linking
 - 7x24 background experiment mode
 - Dataset auto-preview (MD5 diff, sample count, time step range)
+- `expflow system board` → clearml compare-board integration

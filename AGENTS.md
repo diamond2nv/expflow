@@ -10,18 +10,14 @@ working on this project. It describes the project structure, key patterns, pitfa
 ├── expflow/             # Main Python package (12 modules)
 │   ├── __init__.py      # Version, exports
 │   ├── config.py        # YAML + .env config loader
-│   ├── cli.py           # Typer CLI — 11 top-level commands + 6 command groups
+│   ├── cli.py           # Typer CLI — 5 top-level commands + 7 command groups
 │   ├── clearml.py       # ClearML task/queue/dataset CRUD (SDK lazy import)
 │   ├── optuna.py        # Optuna study/trial/plot (SDK lazy import)
 │   ├── langfuse.py      # Langfuse trace/session/metrics (SDK lazy import)
 │   ├── dispatcher.py    # Experiment submit/list/status/cancel
 │   ├── audit.py         # Validation, compliance, report generation
-│   ├── compare.py       # Side-by-side task comparison
-│   ├── hpo.py           # High-level HPO wrapper
-│   ├── status.py        # Component health checks
-│   ├── board.py         # TensorBoard launcher
+│   ├── system.py        # Component health checks + TensorBoard
 │   ├── mcp.py           # MCP Server for Hermes Agent
-│   ├── init.py          # Interactive configuration wizard
 │   ├── cli_clearml.py   # clearml command group (8 sub-commands)
 │   ├── cli_optuna.py    # optuna command group (8 sub-commands)
 │   ├── cli_langfuse.py  # langfuse command group (6 sub-commands)
@@ -29,9 +25,8 @@ working on this project. It describes the project structure, key patterns, pitfa
 │   ├── cli_audit.py     # audit command group (3 sub-commands)
 │   └── cli_system.py    # system command group (2 sub-commands)
 ├── tests/               # pytest tests (98 tests)
-├── scripts/             # Utility scripts
-├── docs/                # English documentation
-│   └── cn/              # 中文文档 (Chinese docs)
+├── docs/                # Design documentation
+│   └── data_layer_design.md   # clearml-data data layer architecture
 ├── config.yaml          # Optional project config
 ├── pyproject.toml       # Package config (setuptools)
 ├── AGENTS.md            # ← This file
@@ -44,40 +39,37 @@ working on this project. It describes the project structure, key patterns, pitfa
 ### Module Dependency Chain
 
 ```
-cli.py (Typer) — 6 command groups + 5 top-level commands
+cli.py (Typer) — 7 command groups + 5 top-level commands
   ├── clearml.py        → Task/Queue/Dataset SDK wrappers
   ├── optuna.py          → Study/Trial/Plot SDK wrappers
   ├── langfuse.py        → Trace/Session/Metrics SDK wrappers
   ├── dispatcher.py      → Experiment dispatch (in-memory registry)
   ├── audit.py           → Validation + compliance + report
-  ├── compare.py         → Side-by-side comparison
-  ├── hpo.py             → High-level HPO wrapper
-  ├── status.py          → Component health checks
-  ├── board.py           → TensorBoard launcher
-  ├── mcp.py             → MCP Server stubs
-  └── init.py            → Configuration wizard
+  ├── system.py          → Component health checks + board
+  └── mcp.py             → MCP Server stubs
 
 All SDK imports are LAZY — cleared at module-level import time,
 loaded only when the corresponding command group is invoked.
+```
 
 ### CLI Command Tree
 
 ```
 expflow
-├── version / info / mcp / init / config        ← top-level (no SDK deps)
-├── clearml     (8 sub-cmds)                     ← lazy import clearml SDK
+├── version / info / mcp / init / config           ← top-level (no SDK deps)
+├── clearml     (8 sub-cmds)                       ← lazy import clearml SDK
 │   ├── tasks / task / enqueue / dequeue / queues / compare
 │   └── dataset-register / dataset-list
-├── optuna      (8 sub-cmds)                     ← lazy import optuna SDK
+├── optuna      (8 sub-cmds)                       ← lazy import optuna SDK
 │   ├── create-study / studies / study / delete-study / ask / tell / plot
-│   └── run                                      ← high-level HPO wrapper
-├── langfuse    (6 sub-cmds)                     ← lazy import langfuse SDK
+│   └── run
+├── langfuse    (6 sub-cmds)                       ← lazy import langfuse SDK
 │   ├── traces / trace / trace-cost / sessions / session / metrics
-├── run         (4 sub-cmds)                     ← no SDK deps (in-memory)
+├── run         (4 sub-cmds)                       ← no SDK deps (in-memory)
 │   ├── submit / list / status / cancel
-├── audit       (3 sub-cmds)                     ← no SDK deps
+├── audit       (3 sub-cmds)                       ← no SDK deps
 │   ├── validate / check-dataset / report
-└── system      (2 sub-cmds)                     ← lazy import per check
+└── system      (2 sub-cmds)                       ← lazy import per check
     ├── status (health checks)
     └── board  (TensorBoard)
 ```
@@ -92,6 +84,8 @@ val = get("clearml.api")       # Dot-separated access
 ```
 
 Config search order: CWD `config.yaml` → parent dirs → `.env` (env-only overrides API keys)
+
+---
 
 ## Development Commands
 
@@ -111,7 +105,7 @@ python -m build             # Build package
 | Category | Description | External Dependencies |
 |----------|-------------|----------------------|
 | Unit | Config CRUD, CLI parsing | None |
-| Unit | Future module logic | None |
+| Unit | Module-level logic | None |
 | Integration | Config ↔ filesystem | Filesystem |
 | Integration | Future: clearml/optuna/langfuse | External services (marked @integration) |
 
@@ -145,14 +139,6 @@ Exceptions (Chinese allowed):
 | `docs/cn/` | Chinese documentation | Intended for Chinese readers |
 | `.hermes/plans/` | Hermes agent plans | Internal tooling, not user-facing |
 | `README.md` | `简体中文` navigation link only | One-line label |
-| `AGENTS.md` | `中文文档` directory reference only | One-line comment |
-
-### Chinese Documentation Convention
-
-- Chinese docs live in `docs/cn/*.zh-CN.md`
-- Must be **line-to-line translations** of English originals (same line count)
-- This enables: diff tracking, side-by-side editing, automated sync checks
-- Update English first, then mirror edits to Chinese version
 
 ### PyPI Package Release Checklist
 
@@ -210,13 +196,6 @@ git tag v0.1.0          # Semantic versioning
 - Sync `pyproject.toml` version field
 - Tag: `git tag v0.x.y && git push --tags`
 
-## File Operations (AI Assistant)
-
-- X Don't use `cat`/`grep`/`sed`/`ls` — use `read_file`/`search_files`/`patch`
-- ✅ Use `write_file` for creating files, `terminal` for running commands
-- ✅ Use `search_files(target="files")` instead of `ls`
-- ✅ Use `search_files(pattern="content")` instead of `grep`
-
 ## Pitfalls
 
 ### Config Cache Is Global
@@ -259,7 +238,7 @@ Hermes uses expflow for experiment dispatch, HPO, dataset compliance, and audit.
 | | `expflow optuna studies` | List all HPO studies |
 | | `expflow optuna study <name>` | Get best result |
 | | `expflow optuna plot <name> --type history` | Generate HPO viz |
-| **Dataset** | `expflow clearml dataset-register <name> --path <path> --compliance allowed/forbidden` | Register dataset |
+| **Dataset** | `expflow clearml dataset-register <name> --compliance allowed` | Add compliance metadata |
 | | `expflow clearml dataset-list` | List registered datasets |
 | | `expflow audit check-dataset <name> --compliance allowed` | Check compliance |
 | **Monitoring** | `expflow system status` | Check measurement plane health |
@@ -272,6 +251,63 @@ Hermes uses expflow for experiment dispatch, HPO, dataset compliance, and audit.
 | **Config** | `expflow init` | Interactive config wizard |
 | | `expflow config` | Show current config |
 | **MCP** | `expflow mcp` | Start MCP Server |
+
+### clearml-data Knowledge (from clearml official docs)
+
+clearml-data (`clearml.Dataset` class) is the data versioning layer. Key patterns:
+
+```python
+# Upload: create → add_files → upload → finalize
+ds = Dataset.create(
+    dataset_name="1D_Burgers", dataset_project="PDEBench",
+    parent_datasets=[PARENT_ID],         # lineage: inherit parent's content
+    dataset_version="1.0",                # semantic version, auto-increment if omitted
+    output_uri=None,                       # default: clearml fileserver
+)
+ds.add_files(path="/data/burgers.hdf5")   # auto-hash, compare with parent, upload diff
+ds.upload()                                # upload to fileserver (chunked, parallel)
+ds.finalize()                              # close → immutable
+
+# Download
+local_path = Dataset.get(
+    dataset_id="abc123"
+).get_mutable_local_copy(
+    target_folder="./data/",
+    overwrite=True,
+)  # auto-cached in ~/.clearml/cache/
+
+# Metadata (used for compliance annotation)
+ds.set_metadata("expflow:compliance", "allowed")
+ds.set_metadata("expflow:md5", "a1b2c3d4e5...")
+```
+
+**Key invariant:** Once finalized, a dataset is read-only. To add/remove files,
+create a child dataset with `parent_datasets`.
+
+### TensorBoardX Integration Knowledge
+
+clearml **automatically captures** all `torch.utils.tensorboard.SummaryWriter` output.
+No code changes needed beyond `Task.init()`:
+
+```python
+# DO this (before PyTorch imports):
+from clearml import Task
+Task.init(project_name="PDEBench", task_name="FNO_burgers")
+
+# THEN import PyTorch and use SummaryWriter as usual:
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
+writer.add_scalar('loss/train', loss, epoch)  # clearml auto-captures
+```
+
+Controls:
+```python
+Task.init(auto_connect_frameworks={
+    'tensorboard': True,    # enables TensorBoardX auto-capture
+    'pytorch': True,        # enables model checkpoint auto-logging
+    'matplotlib': False,    # disable Matplotlib capture
+})
+```
 
 ### Key Design Principles for Agent Workflows
 
@@ -292,7 +328,7 @@ When `expflow mcp` is started, these tools are available:
 | Tool | Function | Backend |
 |------|----------|---------|
 | `exp_run_task` | Submit clearml task + enqueue | clearml SDK |
-| `exp_list_runs` | List recent experiments | clearml SDK / clearml-mcp |
+| `exp_list_runs` | List recent experiments | clearml SDK |
 | `exp_get_metrics` | Get metrics for a run | clearml SDK |
 | `exp_compare_runs` | Compare two runs | clearml SDK |
 | `exp_start_hpo` | Start HPO study | optuna SDK |
@@ -307,63 +343,49 @@ When `expflow mcp` is started, these tools are available:
 
 ### Hermes Scenario Workflows
 
-#### Scenario 1: Task 2 parameter scan
+#### Scenario 1: Task parameter scan
 
-```
-1. Hermes reflects on past results:
-   expflow clearml compare <task_v1> <task_v2>
-
-2. Hermes searches wiki for context:
-   read ~/wiki/concepts/ar-step-and-val-segments.md
-
-3. Hermes searches session history:
-   session_search: "nu=1.0 ar_steps"
-
-4. Hermes designs HPO experiment:
-   expflow optuna run train_task2.py \\
-       --trials 24 --n-jobs 2 --study-name hpo_task2_v3
-
-5. Hermes checks results:
-   expflow optuna study hpo_task2_v3
-   expflow optuna plot hpo_task2_v3 --type history
-
-6. Hermes writes findings to wiki:
-   update ~/wiki/concepts/ar-step-and-val-segments.md
-```
+Steps:
+1. Hermes reflects on past results: `expflow clearml compare <v1> <v2>`
+2. Hermes searches wiki for context: `read ~/wiki/concepts/...`
+3. Hermes designs HPO: `expflow optuna run train.py --trials 24`
+4. Hermes checks results: `expflow optuna study <name>`
+5. Hermes writes findings to wiki
 
 #### Scenario 2: Dataset compliance check
 
-```
-1. Register a dataset:
-   expflow clearml dataset-register burgers_nu0.001 \\
-       --path data/burgers.hdf5 --compliance allowed
+Steps:
+1. Register a dataset with compliance: `expflow clearml dataset-register --compliance allowed`
+2. Verify registration: `expflow clearml dataset-list`
+3. Before submission: `expflow audit check-dataset <name> --compliance allowed`
 
-2. Verify it's registered:
-   expflow clearml dataset-list
+#### Scenario 3: 7×24 autonomous loop
 
-3. Before submission, run compliance audit:
-   expflow audit check-dataset burgers_nu0.001 --compliance allowed
-   expflow audit validate --experiment <id>
-```
-
-#### Scenario 3: 7x24 autonomous experiment loop
-
-Cron-triggered Hermes session uses expflow to drive the full cycle:
-
-```
-1. Collect:    expflow clearml tasks --status completed --project pdebench
-2. Analyze:    expflow clearml compare <best> <second>
-3. Research:   read ~/wiki/concepts/ + session_search
-4. Design:     expflow optuna run <script> --trials 50
-5. Submit:     expflow run submit <cmd> --queue gpu0 --tag v3
-6. Record:     update ~/wiki/log.md
-```
+Cron-triggered session uses expflow to:
+1. Collect results: `expflow clearml tasks --status completed`
+2. Analyze: `expflow clearml compare <best> <second>`
+3. Design: `expflow optuna run <script> --trials 50`
+4. Submit: `expflow run submit --queue gpu0`
+5. Record: update `~/wiki/log.md`
 
 #### Scenario 4: Full audit report
-
 ```
 expflow audit validate <experiment_id>
 expflow audit report <experiment_id>
 expflow langfuse trace-cost <trace_id>
 expflow system status
 ```
+
+## External Wiki References
+
+For deep clearml knowledge, refer to `~/wiki/clearml/`:
+
+| File | Content |
+|------|---------|
+| `data_management.md` | clearml-data CLI + SDK exhaustive API reference |
+| `sdk.md` | Task/Model/HPO core classes |
+| `agent_and_serving.md` | Agent daemon / Pipeline / Scheduler |
+| `deploy.md` | Server deployment, docker-compose, clearml.conf |
+| `advanced.md` | PipelineController / TaskScheduler / TriggerScheduler |
+| `clearml_data_vs_dvc.md` | clearml-data = DVC superset, concept mapping |
+| `tensorboardx_integration.md` | clearml × TensorBoardX auto-capture, zero-code |
