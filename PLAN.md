@@ -14,18 +14,19 @@ optuna, langfuse) via CLI and MCP interfaces. It provides:
 
 ## Phases
 
-### Phase 0: Skeleton (当前)
+### Phase 0: Skeleton ✅
 - [x] Package skeleton: pyproject.toml, __init__.py, config.py, cli.py
 - [x] AGENTS.md + PLAN.md + .gitignore
-- [ ] Initial commit + tag v0.1.0
+- [x] Initial commit + tag v0.1.0
 
-### Phase 1: clearml Integration
-- [ ] `expflow/clearml.py` — task CRUD, queue management, agent control
-- [ ] `expflow/clearml_mcp.py` — MCP tools for Agent experiment dispatch
-- [ ] CLI: `expflow clearml list-tasks`, `expflow clearml enqueue`, `expflow clearml status`
-- [ ] Dataset compliance API — clearml dataset registration with `--compliance allowed/forbidden`
+### Phase 1: clearml Integration ✅
+- [x] `expflow/clearml.py` — task CRUD, queue management, dataset compliance
+- [x] CLI: `expflow clearml tasks/task/enqueue/dequeue/queues/dataset-register/dataset-list`
+- [x] Dataset compliance API — clearml dataset registration with `--compliance allowed/forbidden`
+- [x] 41 tests (unit + CLI mock + entry point subprocess)
+- [ ] `expflow/clearml_mcp.py` — MCP tools for Agent experiment dispatch (stretch/next phase)
 
-### Phase 2: optuna Integration
+### Phase 2: optuna Integration (当前)
 - [ ] `expflow/optuna.py` — study/trial management, optuna-mcp CLI wrapper
 - [ ] `expflow/optuna_mcp.py` — MCP tools for Agent HPO
 - [ ] CLI: `expflow optuna create-study`, `expflow optuna ask/tell`, `expflow optuna plot`

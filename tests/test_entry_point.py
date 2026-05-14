@@ -97,6 +97,19 @@ class TestEntryPoint:
         assert "version" in result.stdout
         assert "info" in result.stdout
         assert "clearml" in result.stdout
+        assert "optuna" in result.stdout
+
+    def test_entry_point_optuna_help(self):
+        """Entry point optuna --help shows all optuna sub-commands."""
+        result = _run_entry_point(["optuna", "--help"])
+        assert result.returncode == 0
+        assert "create-study" in result.stdout
+        assert "studies" in result.stdout
+        assert "study" in result.stdout
+        assert "delete-study" in result.stdout
+        assert "ask" in result.stdout
+        assert "tell" in result.stdout
+        assert "plot" in result.stdout
 
     def test_entry_point_info(self):
         """Entry point info shows system info (no clearml needed)."""
@@ -181,3 +194,14 @@ class TestEntryPointMissingDep:
             )
             assert "ModuleNotFoundError" in clearml_result.stderr
             assert "clearml" in clearml_result.stderr
+
+            # optuna command without optuna SDK -> clean ModuleNotFoundError
+            optuna_result = subprocess.run(
+                [expflow_cli, "optuna", "studies"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert optuna_result.returncode == 1, f"Expected non-zero, got: {optuna_result.stdout}"
+            assert "ModuleNotFoundError" in optuna_result.stderr
+            assert "optuna" in optuna_result.stderr

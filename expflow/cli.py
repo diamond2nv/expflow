@@ -33,9 +33,25 @@ def _lazy_register_clearml():
     return clearml_app
 
 
-# Call at module level to register clearml sub-command
-# (import is lazy — cli_clearml does NOT import clearml SDK at module level)
+def _lazy_register_optuna():
+    """Lazily import and register optuna sub-command group."""
+    from expflow.cli_optuna import optuna_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "optuna":
+            return optuna_app
+
+    app.add_typer(
+        optuna_app,
+        name="optuna",
+        help="Interact with Optuna hyperparameter optimization",
+    )
+    return optuna_app
+
+
+# Call at module level to register sub-command groups
 _ = _lazy_register_clearml()
+_ = _lazy_register_optuna()
 
 
 @app.callback()
