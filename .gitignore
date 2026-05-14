@@ -1,0 +1,36 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ── Data / Output ──
+data/
+logs/
+output/
+
+# ── External Dependencies ──
+venv/
+.venv/
+.uv/
+uv.lock
+.env
+
+# ── System ──
+.DS_Store
+*.swp
+*.swo
+
+# ── IDE ──
+.vscode/
+.idea/
+
+# ── Test Reports ──
+htmlcov/
+.coverage
+.pytest_cache/
+.ruff_cache/
+
+# ── Hermes Plans ──
+.hermes/

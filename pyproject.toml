@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expflow"
+version = "0.1.0"
+description = "Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci — clearml + optuna + langfuse integration, dataset compliance, distributed experiment dispatch."
+authors = [
+    {name = "Li Shen"},
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["experiment", "clearml", "optuna", "mlops", "pdebench", "agentic4sci"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.28",
+    "typer>=0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/diamond2nv/expflow"
+Repository = "https://github.com/diamond2nv/expflow"
+Documentation = "https://github.com/diamond2nv/expflow"
+
+[project.optional-dependencies]
+clearml = [
+    "clearml>=1.17",
+    "clearml-mcp>=0.1",
+]
+optuna = [
+    "optuna>=4.0",
+]
+langfuse = [
+    "langfuse>=2.56",
+]
+mcp = [
+    "expflow[clearml]",
+    "expflow[optuna]",
+    "expflow[langfuse]",
+]
+dev = [
+    "ruff",
+    "pyright",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+]
+
+[project.scripts]
+expflow = "expflow.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["expflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q --tb=short"
+markers = [
+    "slow: marks tests as slow, deselected by default",
+    "integration: marks tests that need external services (clearml/optuna/langfuse)",
+]
+
+[tool.coverage.run]
+source = ["expflow"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N"]
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["expflow"]
+exclude = ["tests"]
+reportMissingImports = true
+reportMissingTypeStubs = false
+strict = ["expflow/**/*.py"]
