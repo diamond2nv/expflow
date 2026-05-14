@@ -332,3 +332,114 @@ def model_upload_cmd(
     print(f"  ID:     {result['id']}")
     print(f"  Task:   {result['task_id']}")
     print(f"  URI:    {result.get('uri', '-')}")
+
+
+# ── Pipeline commands ──
+
+
+@clearml_app.command("pipeline-create")
+def pipeline_create_cmd(
+    name: str = typer.Argument(..., help="Pipeline name"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+    version: Optional[str] = typer.Option(None, "--version", "-v", help="Semantic version"),
+    abort_on_failure: bool = typer.Option(False, "--abort-on-failure", help="Abort on failure"),
+) -> None:
+    """Create a pipeline controller."""
+    from expflow.clearml import pipeline_create
+
+    result = pipeline_create(
+        name=name,
+        project=project,
+        version=version,
+        abort_on_failure=abort_on_failure,
+    )
+    print(f"Pipeline created: {result['name']}")
+    print(f"  Project: {result['project']}")
+    print(f"  Version: {result['version']}")
+
+
+@clearml_app.command("pipeline-add-step")
+def pipeline_add_step_cmd(
+    pipeline_name: str = typer.Argument(..., help="Pipeline name"),
+    step_name: str = typer.Argument(..., help="Step name"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+    base_task_id: Optional[str] = typer.Option(None, "--task-id", help="Base task ID to clone"),
+    base_task_name: Optional[str] = typer.Option(None, "--task-name", "-n", help="Base task name"),
+    parents: Optional[str] = typer.Option(
+        None, "--parents", help="Comma-separated parent step names"
+    ),
+    execution_queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Execution queue"),
+) -> None:
+    """Add a step to an existing pipeline."""
+    from expflow.clearml import pipeline_add_step
+
+    parent_list = parents.split(",") if parents else None
+    result = pipeline_add_step(
+        pipeline_name=pipeline_name,
+        project=project,
+        step_name=step_name,
+        base_task_id=base_task_id,
+        base_task_name=base_task_name,
+        parents=parent_list,
+        execution_queue=execution_queue,
+    )
+    print(f"Step added: {result['step_name']} -> {result['pipeline_name']}")
+    print(f"  Parents: {result['parents']}")
+    print(f"  Status:  {result['status']}")
+
+
+@clearml_app.command("pipeline-start")
+def pipeline_start_cmd(
+    pipeline_name: str = typer.Argument(..., help="Pipeline name"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+    queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Execution queue"),
+) -> None:
+    """Start a pipeline controller."""
+    from expflow.clearml import pipeline_start
+
+    result = pipeline_start(
+        pipeline_name=pipeline_name,
+        project=project,
+        queue_name=queue,
+    )
+    print(f"Pipeline started: {result['pipeline_name']}")
+    print(f"  Status: {result['status']}")
+
+
+@clearml_app.command("pipeline-stop")
+def pipeline_stop_cmd(
+    pipeline_name: str = typer.Argument(..., help="Pipeline name"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+) -> None:
+    """Stop a running pipeline."""
+    from expflow.clearml import pipeline_stop
+
+    result = pipeline_stop(
+        pipeline_name=pipeline_name,
+        project=project,
+    )
+    print(f"Pipeline stopped: {result['pipeline_name']}")
+    print(f"  Status: {result['status']}")
+
+
+@clearml_app.command("pipeline-list")
+def pipeline_list_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    max_results: int = typer.Option(20, "--max", "-m", help="Max results"),
+) -> None:
+    """List pipeline controller tasks."""
+    from expflow.clearml import pipeline_list
+
+    pipelines = pipeline_list(
+        project_name=project,
+        max_results=max_results,
+    )
+
+    if not pipelines:
+        print("No pipelines found.")
+        return
+
+    print(f"{'ID':<24} {'NAME':<30} {'STATUS':<14} {'PROJECT':<20}")
+    print("-" * 88)
+    for p in pipelines:
+        print(f"{p['id']:<24} {p['name']:<30} {p['status']:<14} {p['project']:<20}")

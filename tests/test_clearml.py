@@ -604,3 +604,202 @@ class TestModelUpload:
         mock_output.update_weights.assert_called()
         assert result["id"] == "model_out_1"
         assert result["task_id"] == "task_train_1"
+
+
+# ══════════════════════════════════════════════════════════════
+# Pipeline operations
+# ══════════════════════════════════════════════════════════════
+
+
+class TestPipelineCreate:
+    """pipeline_create() — create a clearml PipelineController."""
+
+    def test_pipeline_create_returns_serialized(self, mock_clearml_pkg):
+        """Creating a pipeline returns plain dict."""
+        mock_pipe = MagicMock()
+        mock_pipe.id = "pipe_1"
+        mock_clearml_pkg.PipelineController.return_value = mock_pipe
+
+        from expflow.clearml import pipeline_create
+
+        result = pipeline_create(
+            name="test_pipeline",
+            project="PDEBench",
+        )
+
+        assert result["name"] == "test_pipeline"
+        assert result["project"] == "PDEBench"
+        assert result["status"] == "created"
+
+    def test_pipeline_create_passes_project(self, mock_clearml_pkg):
+        """PipelineController created with correct project."""
+        mock_clearml_pkg.PipelineController.return_value = MagicMock()
+
+        from expflow.clearml import pipeline_create
+
+        pipeline_create(name="pipe1", project="MyProject")
+
+        mock_clearml_pkg.PipelineController.assert_called_with(
+            name="pipe1",
+            project="MyProject",
+            version=None,
+            abort_on_failure=False,
+            add_pipeline_tags=False,
+            add_run_number=True,
+            docker=None,
+        )
+
+    def test_pipeline_create_with_options(self, mock_clearml_pkg):
+        """Pipeline with all options forwarded."""
+        mock_clearml_pkg.PipelineController.return_value = MagicMock()
+
+        from expflow.clearml import pipeline_create
+
+        pipeline_create(
+            name="opt_pipe",
+            project="Proj",
+            version="2.0",
+            abort_on_failure=True,
+            docker="python:3.11",
+        )
+
+        _, kwargs = mock_clearml_pkg.PipelineController.call_args
+        assert kwargs["version"] == "2.0"
+        assert kwargs["abort_on_failure"] is True
+        assert kwargs["docker"] == "python:3.11"
+
+
+class TestPipelineAddStep:
+    """pipeline_add_step() — add a step to a pipeline controller."""
+
+    def test_add_step_returns_serialized(self, mock_clearml_pkg):
+        """Adding a step via base_task_id returns plain dict."""
+        mock_pipe = MagicMock()
+        mock_clearml_pkg.PipelineController.return_value = mock_pipe
+
+        from expflow.clearml import pipeline_add_step
+
+        result = pipeline_add_step(
+            pipeline_name="pipe1",
+            project="PDEBench",
+            step_name="train",
+            base_task_id="task_1",
+        )
+
+        assert result["step_name"] == "train"
+        assert result["pipeline_name"] == "pipe1"
+        assert result["status"] == "defined"
+        mock_pipe.add_step.assert_called_once_with(
+            name="train",
+            base_task_id="task_1",
+        )
+
+    def test_add_step_with_parents(self, mock_clearml_pkg):
+        """Step with parents gets dependency chain."""
+        mock_pipe = MagicMock()
+        mock_clearml_pkg.PipelineController.return_value = mock_pipe
+
+        from expflow.clearml import pipeline_add_step
+
+        result = pipeline_add_step(
+            pipeline_name="pipe1",
+            project="PDEBench",
+            step_name="validate",
+            base_task_id="task_2",
+            parents=["train"],
+            execution_queue="gpu_queue",
+        )
+
+        assert result["parents"] == ["train"]
+        mock_pipe.add_step.assert_called_once_with(
+            name="validate",
+            base_task_id="task_2",
+            parents=["train"],
+            execution_queue="gpu_queue",
+        )
+
+    def test_add_step_requires_task_id_or_name(self, mock_clearml_pkg):
+        """Providing neither base_task_id nor base_task_name raises ValueError."""
+        from expflow.clearml import pipeline_add_step
+
+        with pytest.raises(ValueError, match="Provide either"):
+            pipeline_add_step(
+                pipeline_name="pipe1",
+                project="PDEBench",
+                step_name="bad_step",
+            )
+
+
+class TestPipelineStart:
+    """pipeline_start() — execute a pipeline controller."""
+
+    def test_pipeline_start_calls_start_and_wait(self, mock_clearml_pkg):
+        """Start triggers pipe.start() and pipe.wait()."""
+        mock_pipe = MagicMock()
+        mock_clearml_pkg.PipelineController.return_value = mock_pipe
+
+        from expflow.clearml import pipeline_start
+
+        result = pipeline_start(
+            pipeline_name="pipe1",
+            project="PDEBench",
+            queue_name="default",
+            timeout_minutes=60,
+        )
+
+        mock_pipe.start.assert_called_once_with(queue_name="default")
+        mock_pipe.wait.assert_called_once_with(timeout=60)
+        assert result["pipeline_name"] == "pipe1"
+        assert result["started"] is True
+
+
+class TestPipelineStop:
+    """pipeline_stop() — stop a running pipeline."""
+
+    def test_pipeline_stop_calls_stop(self, mock_clearml_pkg):
+        """Stop triggers pipe.stop()."""
+        mock_pipe = MagicMock()
+        mock_clearml_pkg.PipelineController.return_value = mock_pipe
+
+        from expflow.clearml import pipeline_stop
+
+        result = pipeline_stop(
+            pipeline_name="pipe1",
+            project="PDEBench",
+        )
+
+        mock_pipe.stop.assert_called_once()
+        assert result["status"] == "stopped"
+
+
+class TestPipelineList:
+    """pipeline_list() — query pipeline tasks."""
+
+    def test_pipeline_list_returns_serialized(self, mock_clearml_pkg):
+        """List returns plain dicts from Task.get_tasks."""
+        mock_task = MagicMock()
+        mock_task.id = "pipe_1"
+        mock_task.name = "training_pipeline"
+        mock_task.project = "PDEBench"
+        mock_task.status = "completed"
+        mock_task.tags = ["pipeline"]
+        mock_clearml_pkg.Task.get_tasks.return_value = [mock_task]
+
+        from expflow.clearml import pipeline_list
+
+        pipelines = pipeline_list(project_name="PDEBench")
+
+        assert len(pipelines) == 1
+        assert pipelines[0]["id"] == "pipe_1"
+        assert pipelines[0]["name"] == "training_pipeline"
+        assert pipelines[0]["status"] == "completed"
+
+    def test_pipeline_list_empty(self, mock_clearml_pkg):
+        """No pipelines returns empty list."""
+        mock_clearml_pkg.Task.get_tasks.return_value = []
+
+        from expflow.clearml import pipeline_list
+
+        pipelines = pipeline_list()
+
+        assert pipelines == []

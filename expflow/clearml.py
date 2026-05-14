@@ -525,3 +525,253 @@ def model_upload(
 def _import_model_module() -> None:
     """Lazy import of clearml model modules."""
     import clearml  # noqa: F401
+
+
+def _get_pipeline_module():
+    import clearml  # noqa: F401
+    from clearml import PipelineController  # noqa: F811
+
+    return PipelineController
+
+
+def _get_task_module_for_pipeline():
+    import clearml  # noqa: F401
+    from clearml import Task  # noqa: F811
+
+    return Task
+
+
+# ── Pipeline operations ──
+
+
+def pipeline_create(
+    name: str,
+    project: str,
+    version: str | None = None,
+    abort_on_failure: bool = False,
+    add_pipeline_tags: bool = False,
+    add_run_number: bool = True,
+    docker: str | None = None,
+) -> dict[str, Any]:
+    """Create a clearml PipelineController and start tracking it.
+
+    After creation, add steps with pipeline_add_step(), then start with pipeline_start().
+
+    Args:
+        name: Pipeline name (e.g. 'fno_train_eval').
+        project: Project name (e.g. 'PDEBench').
+        version: Optional semantic version (auto-increments if None).
+        abort_on_failure: Abort all steps on any failure (default: False).
+        add_pipeline_tags: Tag steps with pipe:<pipeline_id> (default: False).
+        add_run_number: Append run number to name (default: True).
+        docker: Optional Docker image for remote execution.
+
+    Returns:
+        Dict with pipeline_id, name, project, version, status.
+    """
+    PipelineController = _get_pipeline_module()  # noqa: N806
+
+    pipe = PipelineController(
+        name=name,
+        project=project,
+        version=version,
+        abort_on_failure=abort_on_failure,
+        add_pipeline_tags=add_pipeline_tags,
+        add_run_number=add_run_number,
+        docker=docker,
+    )
+
+    return {
+        "pipeline_id": pipe.id if hasattr(pipe, "id") else "",
+        "name": name,
+        "project": project,
+        "version": version or "",
+        "status": "created",
+    }
+
+
+def pipeline_add_step(
+    pipeline_name: str,
+    project: str,
+    step_name: str,
+    base_task_id: str | None = None,
+    base_task_name: str | None = None,
+    base_task_project: str | None = None,
+    parents: list[str] | None = None,
+    parameter_override: dict[str, Any] | None = None,
+    execution_queue: str | None = None,
+    cache_executed_step: bool = False,
+    time_limit: float | None = None,
+    monitor_metrics: list[str] | None = None,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """Add a step to an existing pipeline controller.
+
+    Args:
+        pipeline_name: Name of the existing pipeline controller task.
+        project: Project name.
+        step_name: Unique name for this step.
+        base_task_id: Existing task ID to clone for this step.
+        base_task_name: Task name to look up (alternative to base_task_id).
+        base_task_project: Project for base_task_name lookup.
+        parents: List of parent step names this step depends on.
+        parameter_override: Dict of parameter overrides.
+        execution_queue: Queue to execute this step on.
+        cache_executed_step: Reuse already-executed tasks (default: False).
+        time_limit: Step time limit in minutes.
+        monitor_metrics: List of metric tuples to log on pipeline task.
+        version: Pipeline version (required if multiple versions exist).
+
+    Returns:
+        Dict with pipeline_name, step_name, status.
+    """
+    if not base_task_id and not base_task_name:
+        raise ValueError("Provide either base_task_id or base_task_name")
+
+    # Load the existing pipeline's task and recreate the controller from it
+    PipelineController = _get_pipeline_module()  # noqa: N806
+
+    # Pass through kwargs for PipelineController
+    pipe = PipelineController(
+        name=pipeline_name,
+        project=project,
+        version=version,
+    )
+
+    # Default parameter_override to empty dict
+    kwargs: dict[str, Any] = {
+        "name": step_name,
+    }
+    if base_task_id:
+        kwargs["base_task_id"] = base_task_id
+    if base_task_name:
+        kwargs["base_task_name"] = base_task_name
+        kwargs["base_task_project"] = base_task_project or project
+    if parents:
+        kwargs["parents"] = parents
+    if parameter_override:
+        kwargs["parameter_override"] = parameter_override
+    if execution_queue:
+        kwargs["execution_queue"] = execution_queue
+    if cache_executed_step:
+        kwargs["cache_executed_step"] = True
+    if time_limit is not None:
+        kwargs["time_limit"] = time_limit
+    if monitor_metrics:
+        kwargs["monitor_metrics"] = monitor_metrics
+
+    pipe.add_step(**kwargs)
+
+    return {
+        "pipeline_name": pipeline_name,
+        "step_name": step_name,
+        "parents": parents or [],
+        "status": "defined",
+    }
+
+
+def pipeline_start(
+    pipeline_name: str,
+    project: str,
+    version: str | None = None,
+    queue_name: str | None = None,
+    timeout_minutes: float | None = None,
+) -> dict[str, Any]:
+    """Start a pipeline controller execution.
+
+    Args:
+        pipeline_name: Pipeline controller task name.
+        project: Project name.
+        version: Pipeline version (required if multiple versions).
+        queue_name: Queue to execute controller on (None = local execution).
+        timeout_minutes: Max wait time in minutes (None = no wait).
+
+    Returns:
+        Dict with pipeline_name, status, started_at.
+    """
+    PipelineController = _get_pipeline_module()  # noqa: N806
+
+    pipe = PipelineController(
+        name=pipeline_name,
+        project=project,
+        version=version,
+    )
+
+    pipe.start(queue_name=queue_name)
+    pipe.wait(timeout=timeout_minutes)
+
+    status = getattr(pipe, "status", "started")
+    return {
+        "pipeline_name": pipeline_name,
+        "status": status,
+        "started": True,
+    }
+
+
+def pipeline_stop(
+    pipeline_name: str,
+    project: str,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """Stop a running pipeline controller.
+
+    Args:
+        pipeline_name: Pipeline controller task name.
+        project: Project name.
+        version: Pipeline version (required if multiple versions).
+
+    Returns:
+        Dict with pipeline_name, status.
+    """
+    PipelineController = _get_pipeline_module()  # noqa: N806
+
+    pipe = PipelineController(
+        name=pipeline_name,
+        project=project,
+        version=version,
+    )
+    pipe.stop()
+
+    return {
+        "pipeline_name": pipeline_name,
+        "status": "stopped",
+    }
+
+
+def pipeline_list(
+    project_name: str | None = None,
+    max_results: int = 20,
+) -> list[dict[str, Any]]:
+    """List pipeline controller tasks.
+
+    Pipeline controllers are clearml tasks with the pipeline tag or
+    whose name contains 'pipeline'.
+
+    Args:
+        project_name: Filter by project.
+        max_results: Max results (default: 20).
+
+    Returns:
+        List of pipeline dicts with id, name, project, status, tags.
+    """
+    Task = _get_task_module_for_pipeline()  # noqa: N806
+
+    tasks = Task.get_tasks(
+        project_name=project_name,
+        task_name="pipeline*",
+        status=["created", "in_progress", "completed", "failed", "stopped"],
+    )
+
+    result = []
+    for t in tasks:
+        result.append(
+            {
+                "id": t.id,
+                "name": getattr(t, "name", ""),
+                "project": getattr(t, "project", ""),
+                "status": getattr(t, "status", ""),
+                "tags": list(getattr(t, "tags", []) or []),
+            }
+        )
+
+    return result[:max_results]

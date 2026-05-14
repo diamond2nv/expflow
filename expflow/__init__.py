@@ -19,6 +19,11 @@ from expflow.clearml import (
     list_tasks,
     model_list,
     model_upload,
+    pipeline_add_step,
+    pipeline_create,
+    pipeline_list,
+    pipeline_start,
+    pipeline_stop,
 )
 
 __all__ = [
@@ -36,4 +41,9 @@ __all__ = [
     "dataset_lineage",
     "model_list",
     "model_upload",
+    "pipeline_create",
+    "pipeline_add_step",
+    "pipeline_start",
+    "pipeline_stop",
+    "pipeline_list",
 ]

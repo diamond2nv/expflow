@@ -26,6 +26,7 @@ def serve() -> None:
     _register_hpo_tools(mcp)
     _register_dataset_tools(mcp)
     _register_model_tools(mcp)
+    _register_pipeline_tools(mcp)
     _register_audit_tools(mcp)
     _register_system_tools(mcp)
 
@@ -174,6 +175,94 @@ def _register_model_tools(mcp: "FastMCP") -> None:
             task_id=task_id,
             framework=framework,
             model_name=model_name,
+        )
+
+
+# ── Pipeline tools ──
+
+
+def _register_pipeline_tools(mcp: "FastMCP") -> None:
+    from expflow.clearml import (
+        pipeline_add_step,
+        pipeline_create,
+        pipeline_list,
+        pipeline_start,
+        pipeline_stop,
+    )
+
+    @mcp.tool()
+    def exp_pipeline_create(
+        name: str,
+        project: str = "PDEBench",
+        version: str | None = None,
+        abort_on_failure: bool = False,
+    ) -> dict:
+        """Create a clearml PipelineController."""
+        return pipeline_create(
+            name=name,
+            project=project,
+            version=version,
+            abort_on_failure=abort_on_failure,
+        )
+
+    @mcp.tool()
+    def exp_pipeline_add_step(
+        pipeline_name: str,
+        step_name: str,
+        project: str = "PDEBench",
+        base_task_id: str | None = None,
+        base_task_name: str | None = None,
+        parents: list[str] | None = None,
+        execution_queue: str | None = None,
+        parameter_override: dict | None = None,
+    ) -> dict:
+        """Add a step to an existing pipeline controller."""
+        return pipeline_add_step(
+            pipeline_name=pipeline_name,
+            project=project,
+            step_name=step_name,
+            base_task_id=base_task_id,
+            base_task_name=base_task_name,
+            parents=parents,
+            execution_queue=execution_queue,
+            parameter_override=parameter_override,
+        )
+
+    @mcp.tool()
+    def exp_pipeline_start(
+        pipeline_name: str,
+        project: str = "PDEBench",
+        queue_name: str | None = None,
+        timeout_minutes: float | None = None,
+    ) -> dict:
+        """Start a pipeline controller execution."""
+        return pipeline_start(
+            pipeline_name=pipeline_name,
+            project=project,
+            queue_name=queue_name,
+            timeout_minutes=timeout_minutes,
+        )
+
+    @mcp.tool()
+    def exp_pipeline_stop(
+        pipeline_name: str,
+        project: str = "PDEBench",
+    ) -> dict:
+        """Stop a running pipeline controller."""
+        return pipeline_stop(
+            pipeline_name=pipeline_name,
+            project=project,
+        )
+
+    @mcp.tool()
+    def exp_pipeline_list(
+        project: str | None = None,
+        max_results: int = 20,
+    ) -> list[dict]:
+        """List pipeline controller tasks."""
+        return pipeline_list(
+            project_name=project,
+            max_results=max_results,
         )
 
 
