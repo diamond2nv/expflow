@@ -12,41 +12,69 @@ optuna, langfuse) via CLI and MCP interfaces. It provides:
 3. **Dataset compliance** — MD5 verification, source provenance, train/val/test audit
 4. **Agent-friendly MCP tools** — read/write experiment metadata, query optimization studies
 
-## Phases
+## Status — 98 tests, 6 CLI command groups, 5 phases complete
 
-### Phase 0: Skeleton ✅
-- [x] Package skeleton: pyproject.toml, __init__.py, config.py, cli.py
-- [x] AGENTS.md + PLAN.md + .gitignore
-- [x] Initial commit + tag v0.1.0
+```
+expflow [OPTIONS] COMMAND
 
-### Phase 1: clearml Integration ✅
-- [x] `expflow/clearml.py` — task CRUD, queue management, dataset compliance
-- [x] CLI: `expflow clearml tasks/task/enqueue/dequeue/queues/dataset-register/dataset-list`
-- [x] Dataset compliance API — clearml dataset registration with `--compliance allowed/forbidden`
-- [x] 41 tests (unit + CLI mock + entry point subprocess)
-- [ ] `expflow/clearml_mcp.py` — MCP tools for Agent experiment dispatch (stretch/next phase)
+  version              Show expflow version
+  info                 Show system and environment info
+  clearml              Interact with ClearML experiment management
+    tasks              List ClearML tasks
+    task               Show details for a single task
+    enqueue            Enqueue a task to a queue
+    dequeue            Dequeue a task
+    queues             List all available queues
+    dataset-register   Register a PDEBench dataset with compliance annotation
+    dataset-list       List registered datasets with compliance info
 
-### Phase 2: optuna Integration ✅
-- [x] `expflow/optuna.py` — study/trial management (create, list, get, delete, ask, tell, plot)
-- [x] CLI: `expflow optuna create-study/studies/study/delete-study/ask/tell/plot`
-- [x] 15 unit tests + 9 CLI tests + entry point coverage — all mock optuna SDK
-- [ ] `expflow/optuna_mcp.py` — MCP tools for Agent HPO (stretch/next phase)
-- [ ] Pipeline integration: expflow `run --tune` auto-launches optuna study (stretch)
+  optuna               Interact with Optuna hyperparameter optimization
+    create-study       Create a new Optuna study
+    studies            List all Optuna studies
+    study              Show details for a study
+    delete-study       Delete a study
+    ask                Ask for next trial parameters
+    tell               Report a trial result
+    plot               Generate optimization visualization
 
-### Phase 3: langfuse Integration (next)
-- [ ] `expflow/langfuse.py` — trace query, cost analysis, session search
-- [ ] CLI: `expflow langfuse traces`, `expflow langfuse cost`, `expflow langfuse sessions`
-- [ ] Agent audit log integration (mirror traces to Langfuse)
-- [ ] Web dashboard annotation (MCP tools for Agent self-annotation)
+  langfuse             Interact with Langfuse observability platform
+    traces             List Langfuse traces
+    trace              Show details for a trace
+    trace-cost         Show cost breakdown for a trace
+    sessions           List Langfuse sessions
+    session            Show details for a session
+    metrics            Show aggregated usage/cost metrics
 
-### Phase 4: Distributed Experiment Dispatch
-- [ ] `expflow/dispatcher.py` — Hermes -> expflow CLI -> (clearml agent | OpenCode) routing
-- [ ] `expflow/dispatcher_mcp.py` — Agent orchestration MCP tools
-- [ ] Multi-GPU task scheduling with clearml queue management
-- [ ] 7x24 background experiment mode (Hermes sleeps, expflow monitors)
+  run                  Submit and manage experiments
+    submit             Submit an experiment
+    list               List all experiments
+    status             Show experiment status
+    cancel             Cancel an experiment
 
-### Phase 5: Audit Pipeline
-- [ ] `expflow/audit.py` — experiment result cross-validation, reproducibility check
-- [ ] `expflow/report.py` — auto-generated experiment report (Markdown + PDF)
-- [ ] Langfuse <-> clearml trace linking
-- [ ] Competition compliance checker (training data provenance, checkpoint lineage)
+  audit                Experiment validation, compliance checking, report generation
+    validate           Run validation checks on an experiment
+    check-dataset      Check dataset compliance
+    report             Generate an experiment report (Markdown)
+```
+
+## Test Coverage
+
+| Package | Tests | Scope |
+|---------|-------|-------|
+| expflow.clearml | 24 unit | Task CRUD, queue mgmt, dataset compliance |
+| expflow.optuna | 15 unit | Study CRUD, ask/tell, plot |
+| expflow.langfuse | 10 unit | Trace list/get, cost, sessions, metrics |
+| expflow.dispatcher | 9 unit | Experiment submit/list/status/cancel |
+| expflow.audit | 13 unit | Validation, compliance check, report |
+| CLI (CliRunner) | 21 | All 5 command groups + entry point subprocess |
+| **Total** | **98 tests, all pass** | `ruff` 0 errors, 5 commits |
+
+## Stretch Goals (not implemented)
+
+- `expflow/clearml_mcp.py` — MCP tools for Agent experiment dispatch
+- `expflow/optuna_mcp.py` — MCP tools for Agent HPO
+- `expflow/dispatcher_mcp.py` — Agent orchestration MCP tools
+- `expflow/run --tune` — auto-launch optuna study alongside experiment
+- Multi-GPU task scheduling with clearml queue management
+- Langfuse <-> clearml trace linking
+- 7x24 background experiment mode
