@@ -148,19 +148,32 @@ def dataset_register_cmd(
         help="Compliance status: allowed or forbidden",
     ),
 ) -> None:
-    """Register a PDEBench dataset with compliance annotation."""
-    from expflow.clearml import register_dataset
+    """[DEPRECATED] Register a PDEBench dataset with compliance annotation.
 
-    result = register_dataset(
-        name=name,
-        version=version,
-        path=path,
-        compliance=compliance,  # type: ignore — validated by register_dataset
+    Use `dataset-upload` or `annotate-compliance` instead.
+    """
+    print(
+        "  [WARN] 'dataset-register' is deprecated. Use 'dataset-upload' to upload,"
+        " or 'annotate-compliance' for metadata-only tagging."
     )
-    print(f"Dataset registered: {result['name']} v{result['version']}")
+    # annotate_compliance requires a dataset_id, not a name/path
+    # This is a best-effort: look up dataset by name or warn
+    from expflow.clearml import annotate_compliance, list_datasets
+
+    datasets = list_datasets(name_filter=name)
+    ds = next((d for d in datasets if d["name"] == name), None)
+    if not ds:
+        print(f"  ERROR: No dataset found with name '{name}'. Use 'dataset-upload' first.")
+        raise typer.Exit(code=1)
+
+    result = annotate_compliance(
+        dataset_id=ds["id"],
+        compliance=compliance,  # type: ignore
+    )
+    print(f"Dataset registered: {ds['name']} v{ds.get('version', '?')}")
     print(f"  ID:         {result['id']}")
     print(f"  Compliance: {result['compliance']}")
-    print(f"  Path:       {result['path']}")
+    print(f"  Path:       {path}")
 
 
 @clearml_app.command("dataset-list")
