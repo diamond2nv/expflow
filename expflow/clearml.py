@@ -535,10 +535,7 @@ def _get_pipeline_module():
 
 
 def _get_task_module_for_pipeline():
-    import clearml  # noqa: F401
-    from clearml import Task  # noqa: F811
-
-    return Task
+    return _get_task_module()
 
 
 # ── Pipeline operations ──
