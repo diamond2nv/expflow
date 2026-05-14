@@ -4,7 +4,6 @@
 
 __version__ = "0.1.0"
 
-from expflow.config import get as get_config
-from expflow.config import load_config
-
-__all__ = ["__version__", "load_config", "get_config"]
+# Config is imported lazily — don't import it here to avoid dependency chain
+# at import time. Users call `from expflow.config import load_config` explicitly.
+__all__ = ["__version__"]

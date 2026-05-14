@@ -6,11 +6,36 @@ from typing import Optional
 
 import typer
 
+# Version number — keep synced with expflow/__init__.py
+_EXPFLOW_VERSION = "0.1.0"
+
 app = typer.Typer(
     name="expflow",
     help="Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci",
     no_args_is_help=True,
 )
+
+
+def _lazy_register_clearml():
+    """Lazily import and register clearml sub-command group."""
+    from expflow.cli_clearml import clearml_app
+
+    # Check if already registered
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "clearml":
+            return clearml_app
+
+    app.add_typer(
+        clearml_app,
+        name="clearml",
+        help="Interact with ClearML experiment management",
+    )
+    return clearml_app
+
+
+# Call at module level to register clearml sub-command
+# (import is lazy — cli_clearml does NOT import clearml SDK at module level)
+_ = _lazy_register_clearml()
 
 
 @app.callback()
@@ -30,9 +55,7 @@ def callback(
 @app.command()
 def version() -> None:
     """Show expflow version."""
-    from expflow import __version__
-
-    print(f"expflow v{__version__}")
+    print(f"expflow v{_EXPFLOW_VERSION}")
 
 
 @app.command()

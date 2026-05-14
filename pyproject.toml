@@ -9,14 +9,13 @@ description = "Experiment workflow orchestration toolkit for PDEBench/Agentic4Sc
 authors = [
     {name = "Li Shen"},
 ]
-license = {text = "MIT"}
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["experiment", "clearml", "optuna", "mlops", "pdebench", "agentic4sci"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
