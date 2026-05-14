@@ -49,9 +49,26 @@ def _lazy_register_optuna():
     return optuna_app
 
 
+def _lazy_register_langfuse():
+    """Lazily import and register langfuse sub-command group."""
+    from expflow.cli_langfuse import langfuse_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "langfuse":
+            return langfuse_app
+
+    app.add_typer(
+        langfuse_app,
+        name="langfuse",
+        help="Interact with Langfuse observability platform",
+    )
+    return langfuse_app
+
+
 # Call at module level to register sub-command groups
 _ = _lazy_register_clearml()
 _ = _lazy_register_optuna()
+_ = _lazy_register_langfuse()
 
 
 @app.callback()

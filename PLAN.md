@@ -26,13 +26,14 @@ optuna, langfuse) via CLI and MCP interfaces. It provides:
 - [x] 41 tests (unit + CLI mock + entry point subprocess)
 - [ ] `expflow/clearml_mcp.py` — MCP tools for Agent experiment dispatch (stretch/next phase)
 
-### Phase 2: optuna Integration (当前)
-- [ ] `expflow/optuna.py` — study/trial management, optuna-mcp CLI wrapper
-- [ ] `expflow/optuna_mcp.py` — MCP tools for Agent HPO
-- [ ] CLI: `expflow optuna create-study`, `expflow optuna ask/tell`, `expflow optuna plot`
-- [ ] Pipeline integration: expflow `run --tune` auto-launches optuna study
+### Phase 2: optuna Integration ✅
+- [x] `expflow/optuna.py` — study/trial management (create, list, get, delete, ask, tell, plot)
+- [x] CLI: `expflow optuna create-study/studies/study/delete-study/ask/tell/plot`
+- [x] 15 unit tests + 9 CLI tests + entry point coverage — all mock optuna SDK
+- [ ] `expflow/optuna_mcp.py` — MCP tools for Agent HPO (stretch/next phase)
+- [ ] Pipeline integration: expflow `run --tune` auto-launches optuna study (stretch)
 
-### Phase 3: langfuse Integration
+### Phase 3: langfuse Integration (next)
 - [ ] `expflow/langfuse.py` — trace query, cost analysis, session search
 - [ ] CLI: `expflow langfuse traces`, `expflow langfuse cost`, `expflow langfuse sessions`
 - [ ] Agent audit log integration (mirror traces to Langfuse)
