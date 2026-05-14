@@ -171,64 +171,31 @@ def get_queue_status(queue_name: str) -> dict[str, Any]:
     return result
 
 
-# ── Dataset operations ──
-
 COMPLIANCE_METADATA_KEY = "expflow:compliance"
 _COMPLIANCE_VALUES = frozenset(["allowed", "forbidden"])
 
 
-def register_dataset(
-    name: str,
-    version: str,
-    path: str,
+def annotate_compliance(
+    dataset_id: str,
     compliance: Literal["allowed", "forbidden"],
-    **metadata: Any,
 ) -> dict[str, Any]:
-    """Register a dataset with compliance annotation.
+    """Tag an existing dataset with compliance metadata.
 
     Args:
-        name: Dataset name.
-        version: Dataset version string.
-        path: Local/remote path to dataset files.
-        compliance: 'allowed' (competition-legal) or 'forbidden' (not allowed).
-        **metadata: Additional metadata to attach.
+        dataset_id: The dataset ID to annotate.
+        compliance: 'allowed' or 'forbidden'.
 
     Returns:
-        Dict with id, name, version, compliance, path.
-
-    Raises:
-        ValueError: If compliance is not 'allowed' or 'forbidden'.
+        Dict with id, compliance.
     """
     if compliance not in _COMPLIANCE_VALUES:
         raise ValueError(
             f"compliance must be one of {sorted(_COMPLIANCE_VALUES)}, got '{compliance}'"
         )
-
-    _, dataset_cls = _get_dataset_module()  # noqa: N806
-    ds = dataset_cls.create(
-        dataset_name=name,
-        dataset_version=version,
-        dataset_project="expflow",
-        dataset_tags=[f"expflow:compliance={compliance}"],
-    )
-
-    # Set compliance as metadata for queryability
+    _, dataset_cls = _get_dataset_module()
+    ds = dataset_cls.get(dataset_id=dataset_id)
     ds.set_metadata(COMPLIANCE_METADATA_KEY, compliance)
-
-    # Set additional metadata
-    for k, v in metadata.items():
-        ds.set_metadata(f"expflow:{k}", str(v))
-
-    # Set the dataset files path (sync from local if path exists)
-    ds.set_metadata("expflow:source_path", path)
-
-    return {
-        "id": ds.id,
-        "name": name,
-        "version": version,
-        "compliance": compliance,
-        "path": path,
-    }
+    return {"id": ds.id, "compliance": compliance}
 
 
 def list_datasets(
@@ -244,7 +211,7 @@ def list_datasets(
     Returns:
         List of dataset dicts with id, name, version, compliance.
     """
-    _, dataset_cls = _get_dataset_module()  # noqa: N806
+    _, dataset_cls = _get_dataset_module()
     datasets = dataset_cls.list_datasets()
 
     result = []
@@ -267,3 +234,294 @@ def list_datasets(
         )
 
     return result
+
+
+# ── Dataset upload / download / lineage ──
+
+
+def dataset_upload(
+    local_path: str,
+    dataset_name: str,
+    dataset_project: str = "PDEBench",
+    version: str | None = None,
+    parent_dataset_ids: list[str] | None = None,
+    compliance: Literal["allowed", "forbidden"] | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    extra_metadata: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Upload local files to clearml Fileserver and register as a Dataset.
+
+    Wraps the clearml SDK chain: Dataset.create() -> add_files() -> upload() -> finalize().
+
+    Args:
+        local_path: Path to local file(s) or folder to upload.
+        dataset_name: Dataset name in clearml.
+        dataset_project: Project name (default: PDEBench).
+        version: Semantic version string (auto-increments if None).
+        parent_dataset_ids: List of parent dataset IDs for lineage inheritance.
+        compliance: 'allowed' (competition-legal) or 'forbidden'.
+        description: Optional human-readable description.
+        tags: Optional list of tags.
+        extra_metadata: Optional dict of additional metadata key-value pairs.
+
+    Returns:
+        Dict with id, name, version, compliance, uri, file_count, total_bytes.
+    """
+    _, dataset_cls = _get_dataset_module()
+
+    ds = dataset_cls.create(
+        dataset_name=dataset_name,
+        dataset_project=dataset_project,
+        dataset_version=version,
+        parent_datasets=parent_dataset_ids,
+        description=description or "",
+    )
+
+    # Add files
+    ds.add_files(path=local_path)
+
+    # Set compliance metadata
+    if compliance is not None:
+        ds.set_metadata(COMPLIANCE_METADATA_KEY, compliance)
+
+    # Set tags
+    if tags:
+        for tag in tags:
+            ds.set_metadata(f"expflow:tag:{tag}", "true")
+
+    # Set extra metadata
+    if extra_metadata:
+        for k, v in extra_metadata.items():
+            ds.set_metadata(f"expflow:{k}", v)
+
+    # Set source path
+    ds.set_metadata("expflow:source_path", local_path)
+
+    # Upload to clearml fileserver (default)
+    ds.upload()
+
+    # Finalize (close, immutable)
+    ds.finalize()
+
+    return {
+        "id": ds.id,
+        "name": dataset_name,
+        "version": version or ds.version,
+        "compliance": compliance,
+        "uri": f"clearml://datasets/{ds.id}",
+    }
+
+
+def dataset_download(
+    target_folder: str,
+    dataset_id: str | None = None,
+    dataset_name: str | None = None,
+    dataset_project: str | None = "PDEBench",
+    dataset_version: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Download a Dataset from clearml Fileserver to local folder.
+
+    Wraps clearml SDK: Dataset.get() -> get_mutable_local_copy().
+
+    Args:
+        target_folder: Local path to download to.
+        dataset_id: Dataset ID (mutually exclusive with name/project).
+        dataset_name: Dataset name for lookup (requires project).
+        dataset_project: Project name (default: PDEBench).
+        dataset_version: Specific version (None = latest).
+        overwrite: Whether to overwrite existing target folder contents.
+
+    Returns:
+        Dict with id, name, version, local_path.
+
+    Raises:
+        ValueError: If neither dataset_id nor (dataset_name + project) is provided.
+    """
+    if not dataset_id and not (dataset_name and dataset_project):
+        raise ValueError("Provide either dataset_id or dataset_name + dataset_project")
+    _, dataset_cls = _get_dataset_module()
+
+    ds = dataset_cls.get(
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        dataset_project=dataset_project,
+        dataset_version=dataset_version,
+        only_completed=True,
+    )
+
+    local_path = ds.get_mutable_local_copy(
+        target_folder=target_folder,
+        overwrite=overwrite,
+    )
+
+    return {
+        "id": ds.id,
+        "name": getattr(ds, "name", dataset_name or ""),
+        "version": getattr(ds, "version", dataset_version or ""),
+        "local_path": str(local_path),
+    }
+
+
+def dataset_lineage(
+    dataset_id: str,
+    depth: int = 10,
+) -> list[dict[str, Any]]:
+    """Trace dataset lineage by recursively following the parent chain.
+
+    Args:
+        dataset_id: Starting dataset ID.
+        depth: Maximum recursion depth (default: 10).
+
+    Returns:
+        List of dicts from oldest to newest, each with
+        id, name, version, compliance, parent_id.
+    """
+    _, dataset_cls = _get_dataset_module()
+
+    lineage: list[dict[str, Any]] = []
+    current_id: str | None = dataset_id
+
+    for _ in range(depth):
+        if not current_id:
+            break
+        try:
+            ds = dataset_cls.get(dataset_id=current_id)
+        except Exception:
+            break
+
+        parent_id: str | None = getattr(ds, "parent", None)
+        if parent_id and isinstance(parent_id, str):
+            parent_id = parent_id
+        elif hasattr(ds, "parent") and ds.parent is not None:
+            parent_id = str(ds.parent)
+        else:
+            parent_id = None
+
+        entry = {
+            "id": ds.id,
+            "name": getattr(ds, "name", ""),
+            "version": getattr(ds, "version", ""),
+            "compliance": (
+                ds.get_metadata(COMPLIANCE_METADATA_KEY) if hasattr(ds, "get_metadata") else None
+            ),
+            "parent_id": parent_id,
+        }
+        lineage.append(entry)
+        current_id = parent_id
+
+    # Reverse: oldest first
+    lineage.reverse()
+    return lineage
+
+
+# ── Model operations ──
+
+
+def model_list(
+    project_name: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, str] | None = None,
+    only_published: bool = False,
+    max_results: int = 20,
+) -> list[dict[str, Any]]:
+    """List registered models (checkpoints) from clearml Model store.
+
+    Wraps clearml SDK: Model.query_models().
+
+    Args:
+        project_name: Filter by project name.
+        tags: Filter by tags (OR within list, supports __$and/__$not).
+        metadata: Filter by metadata key-value pairs.
+        only_published: Only published models.
+        max_results: Maximum number of results.
+
+    Returns:
+        List of model dicts with id, name, project, tags, created, uri, task_id, framework.
+    """
+    _import_model_module()
+    from clearml import Model  # noqa: F811
+
+    models = Model.query_models(
+        project_name=project_name,
+        tags=tags,
+        metadata=metadata,
+        only_published=only_published,
+        max_results=max_results,
+    )
+
+    result = []
+    for m in models:
+        result.append(
+            {
+                "id": m.id,
+                "name": getattr(m, "name", ""),
+                "project": getattr(m, "project", ""),
+                "tags": list(getattr(m, "tags", []) or []),
+                "created": str(getattr(m, "created", "")),
+                "uri": getattr(m, "uri", ""),
+                "task_id": getattr(m, "task_id", ""),
+                "framework": getattr(m, "framework", ""),
+            }
+        )
+    return result
+
+
+def model_upload(
+    local_path: str,
+    task_id: str,
+    framework: str = "PyTorch",
+    model_name: str | None = None,
+    upload_uri: str | None = None,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Upload a local model checkpoint to clearml Model store.
+
+    Wraps clearml SDK: OutputModel(task=task) -> update_weights().
+
+    Args:
+        local_path: Path to the model weights file.
+        task_id: ID of the clearml task producing this model.
+        framework: Framework name (default: PyTorch).
+        model_name: Optional human-readable name.
+        upload_uri: Override upload destination (default: clearml fileserver).
+        tags: Optional tags.
+
+    Returns:
+        Dict with id, name, task_id, uri.
+    """
+    _import_model_module()
+    from clearml import (  # noqa: F811
+        OutputModel,  # noqa: F811
+        Task,
+    )
+
+    task = Task.get_task(task_id=task_id)
+
+    output_model = OutputModel(
+        task=task,
+        framework=framework,
+    )
+    if model_name:
+        output_model.name = model_name
+    if tags:
+        output_model.set_metadata("expflow:tags", ",".join(tags))
+
+    output_model.update_weights(
+        weights_filename=local_path,
+        upload_uri=upload_uri,
+        update_comment=f"Uploaded via expflow from {local_path}",
+    )
+
+    return {
+        "id": output_model.id,
+        "name": model_name or Task.get_task(task_id=task_id).name + "_model",
+        "task_id": task_id,
+        "uri": getattr(output_model, "uri", ""),
+    }
+
+
+def _import_model_module() -> None:
+    """Lazy import of clearml model modules."""
+    import clearml  # noqa: F401

@@ -2,8 +2,38 @@
 # -*- coding: utf-8 -*-
 """expflow: experiment workflow orchestration toolkit for PDEBench/Agentic4Sci."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-# Config is imported lazily — don't import it here to avoid dependency chain
-# at import time. Users call `from expflow.config import load_config` explicitly.
-__all__ = ["__version__"]
+# Core API — lazy import at call time, exposed for convenience
+from expflow.clearml import (
+    annotate_compliance,
+    dataset_download,
+    dataset_lineage,
+    dataset_upload,
+    dequeue_task,
+    enqueue_task,
+    get_queue_status,
+    get_task,
+    list_datasets,
+    list_queues,
+    list_tasks,
+    model_list,
+    model_upload,
+)
+
+__all__ = [
+    "__version__",
+    "list_tasks",
+    "get_task",
+    "enqueue_task",
+    "dequeue_task",
+    "list_queues",
+    "get_queue_status",
+    "annotate_compliance",
+    "list_datasets",
+    "dataset_upload",
+    "dataset_download",
+    "dataset_lineage",
+    "model_list",
+    "model_upload",
+]

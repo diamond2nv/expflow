@@ -38,6 +38,8 @@ def mock_clearml_pkg() -> MagicMock:
     pkg.Task = MagicMock(name="Task")
     pkg.Queue = MagicMock(name="Queue")
     pkg.Dataset = MagicMock(name="Dataset")
+    pkg.Model = MagicMock(name="Model")
+    pkg.OutputModel = MagicMock(name="OutputModel")
 
     if "expflow.clearml" in sys.modules:
         del sys.modules["expflow.clearml"]
@@ -281,37 +283,30 @@ class TestListQueues:
 
 
 class TestDatasetCompliance:
-    """register_dataset() and list_datasets() with compliance annotation."""
+    """annotate_compliance() and list_datasets() with compliance annotation."""
 
-    def test_register_dataset_adds_compliance_tag(self, mock_clearml_pkg):
+    def test_annotate_compliance_sets_metadata(self, mock_clearml_pkg):
         mock_ds = MagicMock()
         mock_ds.id = "ds1"
-        mock_ds.name = "burgers_nu0.001"
-        mock_ds.version = "1.0"
-        mock_clearml_pkg.Dataset.create.return_value = mock_ds
+        mock_clearml_pkg.Dataset.get.return_value = mock_ds
 
-        from expflow.clearml import register_dataset
+        from expflow.clearml import annotate_compliance
 
-        result = register_dataset(
-            name="burgers_nu0.001",
-            version="1.0",
-            path="/data/burgers.hdf5",
+        result = annotate_compliance(
+            dataset_id="ds1",
             compliance="allowed",
-            description="Burgers equation 1D",
         )
 
-        mock_ds.set_metadata.assert_any_call("expflow:compliance", "allowed")
+        mock_ds.set_metadata.assert_called_with("expflow:compliance", "allowed")
         assert result["id"] == "ds1"
         assert result["compliance"] == "allowed"
 
-    def test_register_dataset_rejects_invalid_compliance(self, mock_clearml_pkg):
-        from expflow.clearml import register_dataset
+    def test_annotate_compliance_rejects_invalid(self, mock_clearml_pkg):
+        from expflow.clearml import annotate_compliance
 
         with pytest.raises(ValueError, match="compliance"):
-            register_dataset(
-                name="bad",
-                version="1.0",
-                path="/x",
+            annotate_compliance(
+                dataset_id="ds1",
                 compliance="unknown",
             )
 
@@ -381,3 +376,231 @@ class TestClearmlErrors:
 
         with pytest.raises(ValueError, match="Task not found"):
             get_task("nonexistent")
+
+
+# ══════════════════════════════════════════════════════════════
+# Dataset upload / download / lineage
+# ══════════════════════════════════════════════════════════════
+
+
+class TestDatasetUpload:
+    """dataset_upload() — upload local files to clearml Fileserver."""
+
+    def test_upload_creates_dataset_and_adds_files(self, mock_clearml_pkg):
+        mock_ds = MagicMock()
+        mock_ds.id = "ds_uploaded"
+        mock_ds.version = "1.0"
+        mock_clearml_pkg.Dataset.create.return_value = mock_ds
+
+        from expflow.clearml import dataset_upload
+
+        result = dataset_upload(
+            local_path="/data/burgers.hdf5",
+            dataset_name="burgers_nu0.001",
+        )
+
+        mock_clearml_pkg.Dataset.create.assert_called_with(
+            dataset_name="burgers_nu0.001",
+            dataset_project="PDEBench",
+            dataset_version=None,
+            parent_datasets=None,
+            description="",
+        )
+        mock_ds.add_files.assert_called_with(path="/data/burgers.hdf5")
+        mock_ds.upload.assert_called_once()
+        mock_ds.finalize.assert_called_once()
+        assert result["id"] == "ds_uploaded"
+        assert result["name"] == "burgers_nu0.001"
+
+    def test_upload_with_compliance_and_parents(self, mock_clearml_pkg):
+        mock_ds = MagicMock()
+        mock_ds.id = "ds2"
+        mock_ds.version = "2.0"
+        mock_clearml_pkg.Dataset.create.return_value = mock_ds
+
+        from expflow.clearml import dataset_upload
+
+        result = dataset_upload(
+            local_path="/data/new.hdf5",
+            dataset_name="burgers_synthetic",
+            version="2.0",
+            parent_dataset_ids=["ds_parent"],
+            compliance="forbidden",
+            description="Synthetic long-time data",
+            tags=["synthetic", "long-time"],
+        )
+
+        mock_clearml_pkg.Dataset.create.assert_called_with(
+            dataset_name="burgers_synthetic",
+            dataset_project="PDEBench",
+            dataset_version="2.0",
+            parent_datasets=["ds_parent"],
+            description="Synthetic long-time data",
+        )
+        mock_ds.set_metadata.assert_any_call("expflow:compliance", "forbidden")
+        assert result["compliance"] == "forbidden"
+
+
+class TestDatasetDownload:
+    """dataset_download() — download from Fileserver to local."""
+
+    def test_download_by_id(self, mock_clearml_pkg):
+        mock_ds = MagicMock()
+        mock_ds.id = "ds1"
+        mock_ds.name = "test_ds"
+        mock_ds.version = "1.0"
+        mock_ds.get_mutable_local_copy.return_value = "/tmp/download/test_ds"
+        mock_clearml_pkg.Dataset.get.return_value = mock_ds
+
+        from expflow.clearml import dataset_download
+
+        result = dataset_download(
+            target_folder="/tmp/download",
+            dataset_id="ds1",
+        )
+
+        mock_clearml_pkg.Dataset.get.assert_called_with(
+            dataset_id="ds1",
+            dataset_name=None,
+            dataset_project="PDEBench",
+            dataset_version=None,
+            only_completed=True,
+        )
+        mock_ds.get_mutable_local_copy.assert_called_with(
+            target_folder="/tmp/download",
+            overwrite=False,
+        )
+        assert result["local_path"] == "/tmp/download/test_ds"
+
+    def test_download_requires_id_or_name(self, mock_clearml_pkg):
+        from expflow.clearml import dataset_download
+
+        with pytest.raises(ValueError, match="Provide either dataset_id"):
+            dataset_download(target_folder="/tmp/download")
+
+
+class TestDatasetLineage:
+    """dataset_lineage() — trace parent chain."""
+
+    def test_lineage_single_level(self, mock_clearml_pkg):
+        mock_ds = MagicMock()
+        mock_ds.id = "child"
+        mock_ds.name = "child_ds"
+        mock_ds.version = "2.0"
+        mock_ds.parent = None
+        mock_ds.get_metadata.return_value = "allowed"
+        mock_clearml_pkg.Dataset.get.return_value = mock_ds
+
+        from expflow.clearml import dataset_lineage
+
+        lineage = dataset_lineage(dataset_id="child")
+
+        assert len(lineage) == 1
+        assert lineage[0]["id"] == "child"
+        assert lineage[0]["compliance"] == "allowed"
+        assert lineage[0]["parent_id"] is None
+
+    def test_lineage_multi_level(self, mock_clearml_pkg):
+        grandparent = MagicMock()
+        grandparent.id = "gp"
+        grandparent.name = "grandparent"
+        grandparent.version = "0.5"
+        grandparent.parent = None
+        grandparent.get_metadata.return_value = "allowed"
+
+        parent = MagicMock()
+        parent.id = "p"
+        parent.name = "parent"
+        parent.version = "1.0"
+        parent.parent = "gp"
+        parent.get_metadata.return_value = "allowed"
+
+        child = MagicMock()
+        child.id = "c"
+        child.name = "child"
+        child.version = "2.0"
+        child.parent = "p"
+        child.get_metadata.return_value = "forbidden"
+
+        mock_clearml_pkg.Dataset.get.side_effect = [child, parent, grandparent]
+
+        from expflow.clearml import dataset_lineage
+
+        lineage = dataset_lineage(dataset_id="c")
+
+        assert len(lineage) == 3
+        assert lineage[0]["id"] == "gp"
+        assert lineage[1]["id"] == "p"
+        assert lineage[2]["id"] == "c"
+        # Compliance inherited
+        assert lineage[0]["compliance"] == "allowed"
+        assert lineage[2]["compliance"] == "forbidden"
+
+
+# ══════════════════════════════════════════════════════════════
+# Model operations
+# ══════════════════════════════════════════════════════════════
+
+
+class TestModelList:
+    """model_list() — query models from clearml Model store."""
+
+    def test_model_list_returns_serialized(self, mock_clearml_pkg):
+        mock_model = MagicMock()
+        mock_model.id = "model_1"
+        mock_model.name = "fno_burgers"
+        mock_model.project = "PDEBench"
+        mock_model.tags = ["fno", "pde"]
+        mock_model.created = "2026-01-01"
+        mock_model.uri = "clearml://models/model_1"
+        mock_model.task_id = "task_1"
+        mock_model.framework = "PyTorch"
+
+        mock_clearml_pkg.Model.query_models.return_value = [mock_model]
+
+        from expflow.clearml import model_list
+
+        models = model_list(project_name="PDEBench", max_results=10)
+
+        assert len(models) == 1
+        assert models[0]["id"] == "model_1"
+        assert models[0]["name"] == "fno_burgers"
+        assert models[0]["framework"] == "PyTorch"
+
+    def test_model_list_empty(self, mock_clearml_pkg):
+        mock_clearml_pkg.Model.query_models.return_value = []
+
+        from expflow.clearml import model_list
+
+        models = model_list()
+        assert models == []
+
+
+class TestModelUpload:
+    """model_upload() — upload checkpoint to Model store."""
+
+    def test_model_upload_creates_output_model(self, mock_clearml_pkg):
+        mock_task = MagicMock()
+        mock_task.name = "train_fno"
+        mock_clearml_pkg.Task.get_task.return_value = mock_task
+
+        mock_output = MagicMock()
+        mock_output.id = "model_out_1"
+        mock_output.uri = "clearml://fileserver/models/model_out_1"
+        mock_clearml_pkg.OutputModel.return_value = mock_output
+
+        from expflow.clearml import model_upload
+
+        result = model_upload(
+            local_path="checkpoint_50.pt",
+            task_id="task_train_1",
+            model_name="fno_epoch50",
+        )
+
+        mock_clearml_pkg.OutputModel.assert_called_with(
+            task=mock_task,
+            framework="PyTorch",
+        )
+        mock_output.update_weights.assert_called()
+        assert result["id"] == "model_out_1"
+        assert result["task_id"] == "task_train_1"

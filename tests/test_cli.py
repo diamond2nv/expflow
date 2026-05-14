@@ -210,12 +210,11 @@ class TestClearmlQueuesCmd:
 
 
 class TestClearmlDatasetCmd:
-    """expflow clearml dataset-register and dataset-list."""
+    """expflow clearml dataset-upload, dataset-list, dataset-download, dataset-lineage, model-list, model-upload."""
 
-    def test_dataset_register_output(self, mock_clearml_cli):
+    def test_dataset_upload_output(self, mock_clearml_cli):
         mock_ds = MagicMock()
         mock_ds.id = "ds1"
-        mock_ds.name = "burgers_nu0.001"
         mock_ds.version = "1.0"
         mock_clearml_cli.Dataset.create.return_value = mock_ds
 
@@ -227,20 +226,18 @@ class TestClearmlDatasetCmd:
             app,
             [
                 "clearml",
-                "dataset-register",
+                "dataset-upload",
+                "/data/burgers.hdf5",
                 "burgers_nu0.001",
                 "--version",
                 "1.0",
-                "--path",
-                "/data/burgers.hdf5",
                 "--compliance",
                 "allowed",
             ],
         )
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "burgers_nu0.001" in result.stdout
         assert "allowed" in result.stdout
-        assert "/data/burgers.hdf5" in result.stdout
 
     def test_dataset_list_output(self, mock_clearml_cli):
         def _make_ds(ds_id, name, version, compliance):

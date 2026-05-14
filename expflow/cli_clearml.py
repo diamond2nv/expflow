@@ -192,3 +192,143 @@ def dataset_list_cmd(
     for ds in datasets:
         comp = ds.get("compliance", "?") or "-"
         print(f"{ds['id']:<24} {ds['name']:<30} {ds['version']:<10} {comp:<12}")
+
+
+# ── Dataset upload / download / lineage commands ──
+
+
+@clearml_app.command("dataset-upload")
+def dataset_upload_cmd(
+    local_path: str = typer.Argument(..., help="Path to local file or folder to upload"),
+    dataset_name: str = typer.Argument(..., help="Dataset name in clearml"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+    version: Optional[str] = typer.Option(
+        None, "--version", "-v", help="Semantic version (auto if omitted)"
+    ),
+    parent_ids: Optional[str] = typer.Option(
+        None, "--parent-ids", help="Comma-separated parent dataset IDs"
+    ),
+    compliance: Optional[str] = typer.Option(
+        None, "--compliance", "-c", help="Compliance: allowed or forbidden"
+    ),
+    description: Optional[str] = typer.Option(
+        None, "--description", "-d", help="Dataset description"
+    ),
+) -> None:
+    """Upload local files to clearml Fileserver and register as a Dataset."""
+    from expflow.clearml import dataset_upload
+
+    parent_list = parent_ids.split(",") if parent_ids else None
+    result = dataset_upload(
+        local_path=local_path,
+        dataset_name=dataset_name,
+        dataset_project=project,
+        version=version,
+        parent_dataset_ids=parent_list,
+        compliance=compliance,  # type: ignore
+        description=description,
+    )
+    print(f"Dataset uploaded: {result['name']} v{result['version']}")
+    print(f"  ID:         {result['id']}")
+    print(f"  Compliance: {result.get('compliance', '-')}")
+    print(f"  URI:        {result['uri']}")
+
+
+@clearml_app.command("dataset-download")
+def dataset_download_cmd(
+    target_folder: str = typer.Argument(..., help="Local folder to download to"),
+    dataset_id: Optional[str] = typer.Option(None, "--id", help="Dataset ID"),
+    dataset_name: Optional[str] = typer.Option(None, "--name", "-n", help="Dataset name"),
+    dataset_project: Optional[str] = typer.Option(
+        "PDEBench", "--project", "-p", help="Project name"
+    ),
+    version: Optional[str] = typer.Option(None, "--version", "-v", help="Specific version"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing target folder"),
+) -> None:
+    """Download a Dataset from clearml Fileserver to a local folder."""
+    from expflow.clearml import dataset_download
+
+    result = dataset_download(
+        target_folder=target_folder,
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        dataset_project=dataset_project,
+        dataset_version=version,
+        overwrite=overwrite,
+    )
+    print(f"Dataset downloaded: {result['name']} v{result['version']}")
+    print(f"  ID:         {result['id']}")
+    print(f"  Local path: {result['local_path']}")
+
+
+@clearml_app.command("dataset-lineage")
+def dataset_lineage_cmd(
+    dataset_id: str = typer.Argument(..., help="Dataset ID to trace lineage from"),
+    depth: int = typer.Option(10, "--depth", "-d", help="Max recursion depth"),
+) -> None:
+    """Trace dataset lineage via parent chain."""
+    from expflow.clearml import dataset_lineage
+
+    lineage = dataset_lineage(dataset_id=dataset_id, depth=depth)
+    if not lineage:
+        print(f"No lineage found for dataset {dataset_id}")
+        return
+
+    print(f"Lineage for dataset {dataset_id}:")
+    print()
+    print(f"{'ID':<24} {'NAME':<30} {'VERSION':<10} {'COMPLIANCE':<12}")
+    print("-" * 76)
+    for entry in lineage:
+        comp = entry.get("compliance") or "-"
+        print(f"{entry['id']:<24} {entry['name']:<30} {entry['version']:<10} {comp:<12}")
+
+
+# ── Model commands ──
+
+
+@clearml_app.command("model-list")
+def model_list_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name"),
+    only_published: bool = typer.Option(False, "--published", help="Only published models"),
+    max_results: int = typer.Option(20, "--max", "-m", help="Max results"),
+) -> None:
+    """List registered checkpoint models."""
+    from expflow.clearml import model_list
+
+    models = model_list(
+        project_name=project,
+        only_published=only_published,
+        max_results=max_results,
+    )
+    if not models:
+        print("No models found.")
+        return
+
+    print(f"{'ID':<24} {'NAME':<30} {'FRAMEWORK':<14} {'PROJECT':<20}")
+    print("-" * 88)
+    for m in models:
+        print(
+            f"{m['id']:<24} {m['name']:<30} {m.get('framework', '-'):<14} {m.get('project', '-'):<20}"
+        )
+
+
+@clearml_app.command("model-upload")
+def model_upload_cmd(
+    local_path: str = typer.Argument(..., help="Path to model weights file"),
+    task_id: str = typer.Argument(..., help="ID of the task producing this model"),
+    framework: str = typer.Option("PyTorch", "--framework", "-f", help="Framework name"),
+    model_name: Optional[str] = typer.Option(None, "--name", "-n", help="Model display name"),
+) -> None:
+    """Upload a model checkpoint to clearml Model store."""
+    from expflow.clearml import model_upload
+
+    result = model_upload(
+        local_path=local_path,
+        task_id=task_id,
+        framework=framework,
+        model_name=model_name,
+    )
+    print(f"Model uploaded: {result['name']}")
+    print(f"  ID:     {result['id']}")
+    print(f"  Task:   {result['task_id']}")
+    print(f"  URI:    {result.get('uri', '-')}")
