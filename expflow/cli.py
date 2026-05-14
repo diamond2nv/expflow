@@ -97,12 +97,33 @@ def _lazy_register_audit():
     return audit_app
 
 
+def _lazy_register_system():
+    """Lazily import and register system sub-command group."""
+    from expflow.cli_system import system_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "system":
+            return system_app
+
+    app.add_typer(
+        system_app,
+        name="system",
+        help="System monitoring, health checks, utilities",
+    )
+    return system_app
+
+
 # Call at module level to register sub-command groups
+# ── Backward-compat sub-command groups ──
 _ = _lazy_register_clearml()
 _ = _lazy_register_optuna()
 _ = _lazy_register_langfuse()
 _ = _lazy_register_run()
 _ = _lazy_register_audit()
+_ = _lazy_register_system()
+
+
+# ── Top-level commands ──
 
 
 @app.callback()
@@ -135,3 +156,37 @@ def info() -> None:
     print(f"Platform: {platform.system()} {platform.release()}")
     print(f"Python: {platform.python_version()}")
     print(f"Config root: {get('', 'N/A')}")
+
+
+@app.command()
+def mcp() -> None:
+    """Start MCP Server for Hermes Agent integration."""
+    from expflow.mcp import start_mcp
+
+    start_mcp()
+
+
+@app.command()
+def init() -> None:
+    """Interactively configure expflow."""
+    from expflow.init import run_init
+
+    run_init()
+
+
+@app.command()
+def config() -> None:
+    """Show current expflow configuration."""
+    from expflow.config import load_config
+
+    cfg = load_config()
+    if not cfg:
+        print("No config loaded.")
+        return
+    for k, v in cfg.items():
+        if isinstance(v, dict):
+            print(f"{k}:")
+            for sk, sv in v.items():
+                print(f"  {sk}: {sv}")
+        else:
+            print(f"{k}: {v}")

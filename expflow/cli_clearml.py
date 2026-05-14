@@ -108,6 +108,31 @@ def list_queues_cmd() -> None:
         print(f"{q['id']:<24} {q['name']:<20}")
 
 
+@clearml_app.command("compare")
+def compare_cmd(
+    task_id_a: str = typer.Argument(..., help="First task ID"),
+    task_id_b: str = typer.Argument(..., help="Second task ID"),
+) -> None:
+    """Compare two tasks side by side."""
+    from expflow.compare import compare_tasks
+
+    result = compare_tasks(task_id_a, task_id_b)
+    if "error" in result:
+        print(f"Error: {result['error']}")
+        return
+
+    a, b = result["a"], result["b"]
+    print(f"Comparison: {a['name']} vs {b['name']}")
+    print()
+    print(f"{'Field':<20} {'Task A':<30} {'Task B':<30}")
+    print("-" * 80)
+    print(f"{'Status':<20} {a['status']:<30} {b['status']:<30}")
+    print(f"{'Project':<20} {a['project']:<30} {b['project']:<30}")
+    print(
+        f"{'Tags':<20} {', '.join(a.get('tags', []))[:27]:<30} {', '.join(b.get('tags', []))[:27]:<30}"
+    )
+
+
 # ── Dataset commands ──
 
 

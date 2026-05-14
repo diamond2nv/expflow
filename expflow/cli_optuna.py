@@ -190,3 +190,39 @@ def plot_cmd(
         storage=storage,
     )
     print(f"Plot saved to: {result['output_path']}")
+
+
+# ── High-level HPO ──
+
+
+@optuna_app.command("run")
+def hpo_run_cmd(
+    script: str = typer.Argument(..., help="Training script path"),
+    trials: int = typer.Option(50, "--trials", "-t", help="Number of trials"),
+    n_jobs: int = typer.Option(1, "--n-jobs", "-j", help="Parallel jobs"),
+    study_name: Optional[str] = typer.Option(
+        None,
+        "--study-name",
+        "-n",
+        help="Study name (default: auto)",
+    ),
+) -> None:
+    """Run hyperparameter optimization on a script. Wraps Optuna study + trials."""
+    from expflow.hpo import run_hpo
+
+    result = run_hpo(
+        script=script,
+        n_trials=trials,
+        n_jobs=n_jobs,
+        study_name=study_name,
+    )
+
+    if "error" in result:
+        print(f"Error: {result['error']}")
+        return
+
+    print(f"HPO started: study={result['study_name']}")
+    print(f"  Script:   {result['script']}")
+    print(f"  Trials:   {result['n_trials']}")
+    print(f"  Parallel: {result['n_jobs']}")
+    print(f"  Best:     {result.get('best_value', 'pending')}")
