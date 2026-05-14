@@ -772,3 +772,143 @@ def pipeline_list(
         )
 
     return result[:max_results]
+
+
+# ── Training init helper ──
+
+
+def init_tracking(
+    task_name: str,
+    project: str = "PDEBench",
+    tags: list[str] | None = None,
+    capture_tensorboard: bool = True,
+    capture_pytorch: bool = True,
+    capture_graph: bool = False,
+    graph_input_shape: tuple | list | None = None,
+    model: Any | None = None,
+    device: str = "cpu",
+    output_uri: str | None = None,
+) -> dict[str, Any]:
+    """Initialize clearml experiment tracking for a training script.
+
+    Wraps Task.init() with PDEBench defaults. Optionally captures the model
+    computation graph via tensorboard add_graph and uploads a SVG/PDF to clearml.
+
+    Args:
+        task_name: Name for this experiment (e.g. 'FNO_burgers_lr0.001').
+        project: Project name (default: PDEBench).
+        tags: Optional tags for filtering.
+        capture_tensorboard: Auto-capture TensorBoardX scalars (default: True).
+        capture_pytorch: Auto-capture PyTorch model checkpoints (default: True).
+        capture_graph: Generate and upload model computation graph SVG/PDF.
+            Disable during competition to save training time. (default: False).
+        graph_input_shape: Required if capture_graph=True. Tuple like (1, 1024, 3).
+        model: Required if capture_graph=True. The model instance to trace.
+        device: Device for graph trace dummy input (default: 'cpu').
+        output_uri: Override artifact output destination.
+
+    Returns:
+        Dict with task_id, task_name, project, graph_uploaded.
+
+    Example:
+        from expflow.clearml import init_tracking
+        task = init_tracking(
+            task_name="FNO_burgers_lr0.001",
+            tags=["fno", "burgers"],
+            capture_graph=False,  # Enable for debugging, disable for competition
+        )
+    """
+    task = _init_task(
+        task_name=task_name,
+        project=project,
+        tags=tags,
+        capture_tensorboard=capture_tensorboard,
+        capture_pytorch=capture_pytorch,
+        output_uri=output_uri,
+    )
+
+    result = {
+        "task_id": task.id,
+        "task_name": task_name,
+        "project": project,
+        "graph_uploaded": False,
+    }
+
+    if capture_graph and model is not None and graph_input_shape is not None:
+        _capture_and_upload_graph(
+            task=task, model=model, input_shape=graph_input_shape, device=device
+        )
+        result["graph_uploaded"] = True
+
+    return result
+
+
+def _init_task(
+    task_name: str,
+    project: str,
+    tags: list[str] | None = None,
+    capture_tensorboard: bool = True,
+    capture_pytorch: bool = True,
+    output_uri: str | None = None,
+):
+    """Internal: initialize a clearml Task with framework control."""
+    import clearml  # noqa: F401
+    from clearml import Task  # noqa: F811
+
+    frameworks: dict[str, bool] = {}
+    if capture_tensorboard:
+        frameworks["tensorboard"] = True
+    if capture_pytorch:
+        frameworks["pytorch"] = True
+
+    task = Task.init(
+        project_name=project,
+        task_name=task_name,
+        tags=tags or [],
+        output_uri=output_uri,
+        auto_connect_frameworks=frameworks or True,
+    )
+    return task
+
+
+def _capture_and_upload_graph(
+    task,
+    model: Any,
+    input_shape: tuple | list,
+    device: str = "cpu",
+) -> None:
+    """Generate computation graph SVG/PDF and upload to clearml artifact."""
+    import os
+    import tempfile
+
+    import torch
+
+    # Write tensorboard add_graph (local runs/ directory)
+    from torch.utils.tensorboard import SummaryWriter
+
+    writer = SummaryWriter()
+    dummy = torch.randn(*input_shape).to(device)
+    writer.add_graph(model, dummy)
+    writer.close()
+
+    # Generate SVG via torchviz and upload to clearml
+    try:
+        from torchviz import make_dot
+
+        dummy = torch.randn(*input_shape).to(device)
+        y = model(dummy)
+        dot = make_dot(y, params=dict(model.named_parameters()))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for fmt in ("svg", "pdf"):
+                dot.format = fmt
+                path = os.path.join(tmp, f"model_graph.{fmt}")
+                dot.render(path)
+                task.upload_artifact(
+                    name=f"model_graph_{fmt}",
+                    artifact_object=path,
+                )
+    except ImportError:
+        import warnings
+
+        warnings.warn("torchviz not installed. Skipping SVG/PDF graph upload.")

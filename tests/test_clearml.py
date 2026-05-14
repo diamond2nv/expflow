@@ -803,3 +803,67 @@ class TestPipelineList:
         pipelines = pipeline_list()
 
         assert pipelines == []
+
+
+# ══════════════════════════════════════════════════════════════
+# init_tracking
+# ══════════════════════════════════════════════════════════════
+
+
+class TestInitTracking:
+    """init_tracking() — Task.init wrapper with graph capture support."""
+
+    def test_init_tracking_returns_task_info(self, mock_clearml_pkg):
+        """Basic init returns task_id, task_name, project."""
+        mock_task = MagicMock()
+        mock_task.id = "task_init_1"
+        mock_clearml_pkg.Task.init.return_value = mock_task
+
+        from expflow.clearml import init_tracking
+
+        result = init_tracking(
+            task_name="test_run",
+            project="PDEBench",
+        )
+
+        assert result["task_id"] == "task_init_1"
+        assert result["task_name"] == "test_run"
+        assert result["project"] == "PDEBench"
+        assert result["graph_uploaded"] is False
+
+    def test_init_tracking_passes_frameworks(self, mock_clearml_pkg):
+        """Task.init called with auto_connect_frameworks dict."""
+        mock_clearml_pkg.Task.init.return_value = MagicMock()
+
+        from expflow.clearml import init_tracking
+
+        init_tracking(task_name="t", project="P")
+
+        _, kwargs = mock_clearml_pkg.Task.init.call_args
+        assert kwargs["project_name"] == "P"
+        assert kwargs["task_name"] == "t"
+        assert kwargs["auto_connect_frameworks"] == {"tensorboard": True, "pytorch": True}
+
+    def test_init_tracking_disabled_frameworks(self, mock_clearml_pkg):
+        """capture_tensorboard=False omits tensorboard from frameworks."""
+        mock_clearml_pkg.Task.init.return_value = MagicMock()
+
+        from expflow.clearml import init_tracking
+
+        init_tracking(task_name="t", project="P", capture_tensorboard=False)
+
+        _, kwargs = mock_clearml_pkg.Task.init.call_args
+        fw = kwargs["auto_connect_frameworks"]
+        assert "tensorboard" not in fw
+        assert fw["pytorch"] is True
+
+    def test_init_tracking_graph_disabled_by_default(self, mock_clearml_pkg):
+        """capture_graph=False (default) skips graph upload."""
+        mock_task = MagicMock()
+        mock_task.id = "t1"
+        mock_clearml_pkg.Task.init.return_value = mock_task
+
+        from expflow.clearml import init_tracking
+
+        result = init_tracking(task_name="t", project="P", capture_graph=False)
+        assert result["graph_uploaded"] is False
