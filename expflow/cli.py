@@ -65,10 +65,27 @@ def _lazy_register_langfuse():
     return langfuse_app
 
 
+def _lazy_register_run():
+    """Lazily import and register run sub-command group."""
+    from expflow.cli_run import run_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "run":
+            return run_app
+
+    app.add_typer(
+        run_app,
+        name="run",
+        help="Submit and manage experiments",
+    )
+    return run_app
+
+
 # Call at module level to register sub-command groups
 _ = _lazy_register_clearml()
 _ = _lazy_register_optuna()
 _ = _lazy_register_langfuse()
+_ = _lazy_register_run()
 
 
 @app.callback()
