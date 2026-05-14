@@ -19,20 +19,46 @@ def get_run_app() -> typer.Typer:
 
 @run_app.command("submit")
 def submit_cmd(
-    command: str = typer.Argument(..., help="Command to execute"),
+    command: str = typer.Argument(..., help="Command or script path to execute"),
     queue: str = typer.Option("default", "--queue", "-q", help="Target queue"),
     tags: Optional[str] = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
     project: str = typer.Option("expflow", "--project", "-p", help="Project name"),
+    use_clearml: bool = typer.Option(
+        False, "--use-clearml", help="Use clearml Task.create() with auto-injected Task.init"
+    ),
+    arg: Optional[list[str]] = typer.Option(
+        None, "--arg", "-a", help="Script argument, e.g. --arg lr=0.001 --arg epochs=100"
+    ),
 ) -> None:
-    """Submit an experiment."""
+    """Submit an experiment.
+
+    Use --use-clearml to wrap a Python script with automatic Task.init injection,
+    so the script runs via clearml-agent without any code modification.
+    """
     from expflow.dispatcher import dispatch_experiment
 
     tag_list = tags.split(",") if tags else None
-    result = dispatch_experiment(command, queue=queue, tags=tag_list, project=project)
+    script_args: dict[str, str] = {}
+    if arg:
+        for a in arg:
+            if "=" in a:
+                k, v = a.split("=", 1)
+                script_args[k] = v
+
+    result = dispatch_experiment(
+        command,
+        queue=queue,
+        tags=tag_list,
+        project=project,
+        use_clearml_task=use_clearml,
+        script_args=script_args if script_args else None,
+    )
     print(f"Experiment submitted: {result['experiment_id']}")
     print(f"  Queue:     {result['queue']}")
     print(f"  Status:    {result['status']}")
     print(f"  Timestamp: {result['timestamp']}")
+    if "clearml_task_id" in result and result["clearml_task_id"]:
+        print(f"  clearml Task: {result['clearml_task_id']}")
 
 
 @run_app.command("list")

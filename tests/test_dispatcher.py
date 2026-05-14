@@ -78,6 +78,56 @@ class TestDispatchExperiment:
         result = dispatch_experiment("python train.py")
         assert result["queue"] == "default"
 
+    def test_dispatch_with_clearml_task(self, mock_deps):
+        """dispatch with use_clearml_task=True calls Task.create."""
+        mock_task = MagicMock()
+        mock_task.id = "clearml_task_123"
+        mock_deps["clearml"].Task.create.return_value = mock_task
+
+        from expflow.dispatcher import dispatch_experiment
+
+        result = dispatch_experiment(
+            command="train.py",
+            queue="gpu_queue",
+            use_clearml_task=True,
+            script_args={"lr": "0.001", "epochs": "100"},
+        )
+
+        assert result["status"] == "queued"
+        assert result["clearml_task_id"] == "clearml_task_123"
+        mock_deps["clearml"].Task.create.assert_called_with(
+            project_name="expflow",
+            task_name="train.py",
+            repo="train.py",
+            script="train.py",
+            add_task_init_call=True,
+        )
+
+    def test_dispatch_clearml_skips_non_python(self, mock_deps):
+        """use_clearml_task=True with non-.py command skips Task.create."""
+        from expflow.dispatcher import dispatch_experiment
+
+        result = dispatch_experiment(
+            command="echo hello",
+            use_clearml_task=True,
+        )
+
+        assert result["status"] == "dispatched"  # not queued
+        assert "clearml_task_id" not in result
+
+    def test_is_python_script_true(self):
+        from expflow.dispatcher import is_python_script
+
+        assert is_python_script("train.py") is True
+        assert is_python_script("train_fno.py") is True
+
+    def test_is_python_script_false(self):
+        from expflow.dispatcher import is_python_script
+
+        assert is_python_script("python train.py") is False
+        assert is_python_script("echo hello") is False
+        assert is_python_script("train.sh") is False
+
 
 # ══════════════════════════════════════════════════════════════
 # list_experiments
