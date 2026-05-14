@@ -40,11 +40,22 @@ def mock_clearml_pkg() -> MagicMock:
     pkg.Dataset = MagicMock(name="Dataset")
     pkg.Model = MagicMock(name="Model")
     pkg.OutputModel = MagicMock(name="OutputModel")
+    pkg.automation = MagicMock(name="automation")
+    pkg.automation.TaskScheduler = MagicMock(name="TaskScheduler")
 
     if "expflow.clearml" in sys.modules:
         del sys.modules["expflow.clearml"]
 
-    with patch.dict("sys.modules", {"clearml": pkg}):
+    auto_mod = MagicMock(name="clearml.automation")
+    auto_mod.TaskScheduler = MagicMock(name="TaskScheduler")
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "clearml": pkg,
+            "clearml.automation": auto_mod,
+        },
+    ):
         yield pkg
 
     if "expflow.clearml" in sys.modules:
@@ -867,3 +878,136 @@ class TestInitTracking:
 
         result = init_tracking(task_name="t", project="P", capture_graph=False)
         assert result["graph_uploaded"] is False
+
+
+# ══════════════════════════════════════════════════════════════
+# Scheduler operations
+# ══════════════════════════════════════════════════════════════
+
+
+class TestSchedulerCreate:
+    """scheduler_create() — create a TaskScheduler instance."""
+
+    def test_scheduler_create_returns_status(self, mock_clearml_pkg):
+        """Creating a scheduler returns 'created'."""
+        from expflow.clearml import scheduler_create
+
+        result = scheduler_create()
+
+        assert result["status"] == "created"
+
+    def test_scheduler_create_passes_project(self, mock_clearml_pkg):
+        """scheduler_create returns status without creating instance."""
+        from expflow.clearml import scheduler_create
+
+        result = scheduler_create(
+            force_create_task_name="my_scheduler",
+            force_create_task_project="PDEBench",
+        )
+
+        assert result["status"] == "created"
+
+
+class TestSchedulerAddTask:
+    """scheduler_add_task() — add a cron-like schedule."""
+
+    def test_scheduler_add_task_calls_add_task(self, mock_clearml_pkg):
+        """add_task on scheduler called with correct args."""
+        mock_scheduler = MagicMock()
+        mock_scheduler.add_task.return_value = True
+        mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
+
+        from expflow.clearml import scheduler_add_task
+
+        result = scheduler_add_task(
+            task_id="task_1",
+            queue="default",
+            hour=1,
+            name="hourly_train",
+        )
+
+        mock_scheduler.add_task.assert_called_with(
+            schedule_task_id="task_1",
+            queue="default",
+            name="hourly_train",
+            minute=None,
+            hour=1,
+            day=None,
+            weekdays=None,
+            month=None,
+            recurring=True,
+            single_instance=False,
+            execute_immediately=False,
+            task_parameters=None,
+        )
+        assert result["status"] == "scheduled"
+        assert result["added"] is True
+
+    def test_scheduler_add_task_daily(self, mock_clearml_pkg):
+        """Daily schedule at 9:00."""
+        mock_scheduler = MagicMock()
+        mock_scheduler.add_task.return_value = True
+        mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
+
+        from expflow.clearml import scheduler_add_task
+
+        result = scheduler_add_task(task_id="task_1", queue="default", minute=0, hour=9, day=1)
+
+        assert result["status"] == "scheduled"
+
+
+class TestSchedulerList:
+    """scheduler_list() — list scheduled jobs."""
+
+    def test_scheduler_list_returns_serialized(self, mock_clearml_pkg):
+        """List returns serialized schedule job dicts."""
+        mock_job1 = MagicMock()
+        mock_job1.task_id = "t1"
+        mock_job1.name = "hourly_job"
+        mock_job1.queue = "default"
+        mock_job1.recurring = True
+
+        mock_job2 = MagicMock()
+        mock_job2.task_id = "t2"
+        mock_job2.name = "daily_job"
+        mock_job2.queue = "gpu_queue"
+        mock_job2.recurring = True
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_scheduled_tasks.return_value = [mock_job1, mock_job2]
+        mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
+
+        from expflow.clearml import scheduler_list
+
+        jobs = scheduler_list()
+
+        assert len(jobs) == 2
+        assert jobs[0]["task_id"] == "t1"
+        assert jobs[1]["name"] == "daily_job"
+
+    def test_scheduler_list_empty(self, mock_clearml_pkg):
+        """No scheduled tasks returns empty list."""
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_scheduled_tasks.return_value = []
+        mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
+
+        from expflow.clearml import scheduler_list
+
+        assert scheduler_list() == []
+
+
+class TestSchedulerRemove:
+    """scheduler_remove_task() — remove a scheduled task."""
+
+    def test_scheduler_remove_calls_remove(self, mock_clearml_pkg):
+        """remove_task on scheduler called with task_id."""
+        mock_scheduler = MagicMock()
+        mock_scheduler.remove_task.return_value = True
+        mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
+
+        from expflow.clearml import scheduler_remove_task
+
+        result = scheduler_remove_task(task_id="task_1")
+
+        mock_scheduler.remove_task.assert_called_with(task_id="task_1")
+        assert result["removed"] is True

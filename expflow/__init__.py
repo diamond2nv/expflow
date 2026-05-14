@@ -25,6 +25,11 @@ from expflow.clearml import (
     pipeline_list,
     pipeline_start,
     pipeline_stop,
+    scheduler_add_task,
+    scheduler_create,
+    scheduler_list,
+    scheduler_remove_task,
+    scheduler_start,
 )
 
 __all__ = [
@@ -43,6 +48,11 @@ __all__ = [
     "model_list",
     "model_upload",
     "init_tracking",
+    "scheduler_create",
+    "scheduler_add_task",
+    "scheduler_list",
+    "scheduler_remove_task",
+    "scheduler_start",
     "pipeline_create",
     "pipeline_add_step",
     "pipeline_start",

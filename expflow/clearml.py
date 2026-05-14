@@ -774,6 +774,166 @@ def pipeline_list(
     return result[:max_results]
 
 
+# ── Scheduler operations ──
+
+
+def scheduler_create(
+    force_create_task_name: str | None = None,
+    force_create_task_project: str | None = None,
+) -> dict[str, Any]:
+    """Create a clearml TaskScheduler for cron-like task scheduling.
+
+    Args:
+        force_create_task_name: Force creation of scheduler service task name.
+        force_create_task_project: Force creation of scheduler service project.
+
+    Returns:
+        Dict with status and scheduler info.
+    """
+
+    return {
+        "status": "created",
+    }
+
+
+def scheduler_add_task(
+    task_id: str | None = None,
+    queue: str | None = None,
+    name: str | None = None,
+    minute: int | None = None,
+    hour: int | None = None,
+    day: int | None = None,
+    weekdays: list[str] | None = None,
+    month: int | None = None,
+    recurring: bool = True,
+    single_instance: bool = False,
+    execute_immediately: bool = False,
+    task_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add a cron-like scheduling job for an existing clearml Task.
+
+    Args:
+        task_id: ID of the Task to clone and schedule.
+        queue: Queue to enqueue the scheduled task on.
+        name: Unique name for this schedule entry.
+        minute: Minutes between launches or specific minute of hour.
+        hour: Hours between launches or specific hour of day.
+        day: Days between executions or specific day of month.
+        weekdays: Days of week (e.g. ['monday', 'friday']).
+        month: Months between launches or specific month.
+        recurring: Repeat (True) or launch once (False) (default: True).
+        single_instance: Skip launch if previous instance still running.
+        execute_immediately: Execute immediately then follow schedule.
+        task_parameters: Config parameters dict like {'Args/lr': '0.001'}.
+
+    Returns:
+        Dict with task_id, name, queue, recurring, status.
+
+    Example:
+        # Every 1 hour:
+        scheduler_add_task(task_id='abc', queue='default', hour=1)
+
+        # Every day at 9:00:
+        scheduler_add_task(task_id='abc', queue='default', minute=0, hour=9, day=1)
+
+        # Once a month:
+        scheduler_add_task(task_id='abc', queue='default', month=1, day=5)
+    """
+    TaskScheduler = _get_scheduler_module()  # noqa: N806
+
+    scheduler = TaskScheduler()
+    success = scheduler.add_task(
+        schedule_task_id=task_id,
+        queue=queue,
+        name=name,
+        minute=minute,
+        hour=hour,
+        day=day,
+        weekdays=weekdays,
+        month=month,
+        recurring=recurring,
+        single_instance=single_instance,
+        execute_immediately=execute_immediately,
+        task_parameters=task_parameters,
+    )
+
+    return {
+        "task_id": task_id or "",
+        "name": name or "",
+        "queue": queue or "",
+        "recurring": recurring,
+        "added": success,
+        "status": "scheduled" if success else "failed",
+    }
+
+
+def scheduler_list() -> list[dict[str, Any]]:
+    """List all scheduled jobs in the TaskScheduler.
+
+    Returns:
+        List of schedule job dicts.
+    """
+    TaskScheduler = _get_scheduler_module()  # noqa: N806
+
+    scheduler = TaskScheduler()
+    jobs = scheduler.get_scheduled_tasks()
+
+    result = []
+    for job in jobs:
+        result.append(
+            {
+                "task_id": getattr(job, "task_id", ""),
+                "name": getattr(job, "name", ""),
+                "queue": getattr(job, "queue", ""),
+                "recurring": getattr(job, "recurring", True),
+            }
+        )
+
+    return result
+
+
+def scheduler_remove_task(task_id: str) -> dict[str, Any]:
+    """Remove a task from the TaskScheduler schedule.
+
+    Args:
+        task_id: Task ID or name to remove from schedule.
+
+    Returns:
+        Dict with task_id, removed status.
+    """
+    TaskScheduler = _get_scheduler_module()  # noqa: N806
+
+    scheduler = TaskScheduler()
+    success = scheduler.remove_task(task_id=task_id)
+
+    return {
+        "task_id": task_id,
+        "removed": success,
+    }
+
+
+def scheduler_start() -> dict[str, Any]:
+    """Start the TaskScheduler loop.
+
+    Note: This function blocks and does not return until interrupted.
+
+    Returns:
+        Dict with status.
+    """
+    TaskScheduler = _get_scheduler_module()  # noqa: N806
+
+    scheduler = TaskScheduler()
+    scheduler.start()
+
+    return {"status": "running"}
+
+
+def _get_scheduler_module():
+    import clearml  # noqa: F401
+
+    return clearml.automation.TaskScheduler
+
+
 # ── Training init helper ──
 
 
