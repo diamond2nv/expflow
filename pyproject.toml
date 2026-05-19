@@ -14,7 +14,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["experiment", "clearml", "optuna", "mlops", "pdebench", "agentic4sci"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -33,7 +33,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/diamond2nv/expflow"
 Repository = "https://github.com/diamond2nv/expflow"
-Documentation = "https://github.com/diamond2nv/expflow"
+Source = "https://github.com/diamond2nv/expflow"
+BugTracker = "https://github.com/diamond2nv/expflow/issues"
+Documentation = "https://github.com/diamond2nv/expflow#readme"
 
 [project.optional-dependencies]
 clearml = [
@@ -46,15 +48,15 @@ langfuse = [
     "langfuse>=2.56",
 ]
 mcp = [
-    "expflow[clearml]",
-    "expflow[optuna]",
-    "expflow[langfuse]",
+    "expflow-pde[clearml]",
+    "expflow-pde[optuna]",
+    "expflow-pde[langfuse]",
 ]
 pipeline = [
     "clearml>=1.17",
 ]
 all = [
-    "expflow[clearml,optuna,langfuse,pipeline]",
+    "expflow-pde[clearml,optuna,langfuse,pipeline]",
 ]
 dev = [
     "ruff",
@@ -69,6 +71,10 @@ expflow = "expflow_pde.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["expflow_pde*"]
+
+[tool.setuptools.package-data]
+expflow_pde = ["skills/*.md"]
+"*" = ["skills/**/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
