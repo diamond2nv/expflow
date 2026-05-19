@@ -137,6 +137,18 @@ def set_metric_threshold(metric_name: str, threshold: float) -> None:
     _THRESHOLDS[metric_name] = threshold
 
 
+def get_metric_threshold(metric_name: str) -> float | None:
+    """Get the threshold for a metric, or None if not set.
+
+    Args:
+        metric_name: Key in STANDARD_METRICS or _THRESHOLDS.
+
+    Returns:
+        Threshold value, or None if no threshold is defined.
+    """
+    return _THRESHOLDS.get(metric_name)
+
+
 # ── PDEBench Metric Suite ──
 
 

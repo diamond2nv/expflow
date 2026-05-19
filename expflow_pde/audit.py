@@ -111,7 +111,7 @@ def validate_competition_rules(
             ``checks``: list of per-rule check dicts (name, label, value, passed, detail)
             ``metrics``: input metrics dict
     """
-    from expflow_pde.metrics import get_registered_metrics, validate_metric_threshold
+    from expflow_pde.metrics import get_metric_threshold, get_registered_metrics, validate_metric_threshold
 
     checks: list[dict[str, Any]] = []
     registered = get_registered_metrics()
@@ -124,9 +124,6 @@ def validate_competition_rules(
 
     for metric_name, label in rule_defs:
         value = task_metrics.get(metric_name)
-        info = registered.get(metric_name, {})
-        threshold = info.get("threshold")
-        higher_is_better = info.get("higher_is_better", True)
         passed = True
         detail = ""
 
@@ -144,12 +141,14 @@ def validate_competition_rules(
             )
             continue
 
-        if threshold is not None:
-            v_result = validate_metric_threshold(metric_name, float(value))
-            passed = v_result.get("passed", True)
-            op = "≥" if higher_is_better else "≤"
+        # Use validate_metric_threshold which internally checks _THRESHOLDS
+        passed = validate_metric_threshold(metric_name, float(value))
+        thresh = get_metric_threshold(metric_name)
+        if thresh is not None:
             fv = f"{value}"
-            detail = f"{fv} (rule: {op} {threshold})"
+            detail = f"{fv} (gate: <{thresh})"
+        else:
+            detail = f"{value} (no threshold set)"
 
         checks.append(
             {
