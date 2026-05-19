@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import platform
 import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -100,20 +99,34 @@ def _lazy_register_audit():
     return audit_app
 
 
-def _lazy_register_system():
+def _lazy_register_system() -> None:
     """Lazily import and register system sub-command group."""
     from expflow_pde.cli_system import system_app
 
     for cmd in app.registered_commands:
         if getattr(cmd, "name", None) == "system":
-            return system_app
+            return
 
     app.add_typer(
         system_app,
         name="system",
         help="System monitoring, health checks, utilities",
     )
-    return system_app
+
+
+def _lazy_register_pin() -> None:
+    """Lazily import and register pin sub-command group."""
+    from expflow_pde.cli_pin import pin_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "pin":
+            return
+
+    app.add_typer(
+        pin_app,
+        name="pin",
+        help="Manage PIN protection for destructive operations",
+    )
 
 
 # Call at module level to register sub-command groups
@@ -124,6 +137,7 @@ _ = _lazy_register_langfuse()
 _ = _lazy_register_run()
 _ = _lazy_register_audit()
 _ = _lazy_register_system()
+_ = _lazy_register_pin()
 
 
 # ── Top-level commands ──
@@ -205,7 +219,8 @@ def info() -> None:
     os_ver = f"{platform.system()} {platform.release()}"
 
     # Module availability with version
-    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
 
     modules: dict[str, str] = {}
     for mod in ("clearml", "optuna", "langfuse"):

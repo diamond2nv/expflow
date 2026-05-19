@@ -101,9 +101,20 @@ def status_cmd(
 @run_app.command("cancel")
 def cancel_cmd(
     experiment_id: str = typer.Argument(..., help="Experiment ID"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip PIN confirmation"),
 ) -> None:
-    """Cancel an experiment."""
+    """Cancel an experiment.
+
+    If PIN protection is active, requires PIN verification
+    (unless --force is passed).
+    """
     from expflow_pde.dispatcher import cancel_experiment
+    from expflow_pde.pin import guard
+
+    if not force:
+        if not guard(f"cancel experiment {experiment_id}"):
+            print("Cancelled.")
+            raise typer.Exit(code=1)
 
     result = cancel_experiment(experiment_id)
     if "error" in result:

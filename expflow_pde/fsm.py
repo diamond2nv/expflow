@@ -114,7 +114,7 @@ class ExperimentFSM:
         self._last_event: Optional[str] = None
         self._errors: list[str] = []
 
-        # Build FSM with deferred startup (no implicit transition)
+        # Build FSM with deferred startup
         self._fsm = Fysom(
             initial={"state": STATE_CREATED, "defer": True},
             events=[
@@ -127,9 +127,47 @@ class ExperimentFSM:
             ],
             final=None,
         )
-        # Register generic state-change callbacks after construction
-        for name in ("onchangestate", "onenterstate", "onleavestate", "onafterevent"):
-            setattr(self._fsm, name, self._make_fsm_callback(name))
+        # Monkey-patch fysom lifecycle methods to support generic callbacks.
+        # fysom's built-in _enter_state etc. only look for `onenter<dst>` and `on<dst>`
+        # (specific callbacks per state/event), not `onenterstate` / `onchangestate` etc.
+        # We wrap each so generic callbacks dispatched through user_cbs fire first.
+        user_cbs = self._callbacks
+        _orig_enter = self._fsm._enter_state
+        _orig_leave = self._fsm._leave_state
+        _orig_after = self._fsm._after_event
+        _orig_change = self._fsm._change_state
+
+        def _patched_enter(e: Any) -> None:
+            cb = user_cbs.get(f"on_enter_{e.dst}")
+            if cb:
+                cb(self, e)
+            _orig_enter(e)
+
+        def _patched_leave(e: Any) -> None:
+            cb = user_cbs.get(f"on_leave_{e.src}")
+            if cb:
+                cb(self, e)
+            _orig_leave(e)
+
+        def _patched_after(e: Any) -> None:
+            cb = user_cbs.get(f"on_{e.event}")
+            if cb:
+                cb(self, e)
+            _orig_after(e)
+
+        def _patched_change(e: Any) -> None:
+            cb = user_cbs.get("on_change_state")
+            if cb:
+                cb(self, e, str(e.dst))
+            _orig_change(e)
+
+        self._fsm._enter_state = _patched_enter  # type: ignore[method-assign]
+        self._fsm._leave_state = _patched_leave  # type: ignore[method-assign]
+        self._fsm._after_event = _patched_after  # type: ignore[method-assign]
+        self._fsm._change_state = _patched_change  # type: ignore[method-assign]
+
+        # Fire the deferred startup transition
+        self._fsm.startup()
 
     # ── Properties ──
 
@@ -177,33 +215,27 @@ class ExperimentFSM:
 
     def dispatch(self) -> None:
         """Transition from created → dispatched."""
-        self._last_event = EVENT_DISPATCH
-        self._fsm.dispatch()
+        self.trigger(EVENT_DISPATCH)
 
     def queue(self) -> None:
         """Transition from dispatched → queued."""
-        self._last_event = EVENT_QUEUE
-        self._fsm.queue()
+        self.trigger(EVENT_QUEUE)
 
     def cancel(self) -> None:
         """Transition from {created, dispatched, queued, running} → cancelled."""
-        self._last_event = EVENT_CANCEL
-        self._fsm.cancel()
+        self.trigger(EVENT_CANCEL)
 
     def start(self) -> None:
         """Transition from queued → running (agent picked up the task)."""
-        self._last_event = EVENT_START
-        self._fsm.start()
+        self.trigger(EVENT_START)
 
     def complete(self) -> None:
         """Transition from running → completed."""
-        self._last_event = EVENT_COMPLETE
-        self._fsm.complete()
+        self.trigger(EVENT_COMPLETE)
 
     def fail(self) -> None:
         """Transition from {queued, running} → failed."""
-        self._last_event = EVENT_FAIL
-        self._fsm.fail()
+        self.trigger(EVENT_FAIL)
 
     # ── State representation ──
 
@@ -224,33 +256,4 @@ class ExperimentFSM:
             "terminal_states": sorted(TERMINAL_STATES),
         }
 
-    # ── Internal callbacks ──
-
-    def _make_fsm_callback(self, callback_name: str) -> Callable[..., Any]:
-        """Create a closure that dispatches user callbacks for a given lifecycle phase.
-
-        This avoids the AttributeError crash when fysom's __init__ triggers
-        the initial transition while self._fsm is still being constructed.
-        """
-        # Store reference to avoid closure over loading `self`
-        user_cbs = self._callbacks
-
-        def _cb(e: Any) -> None:
-            if callback_name == "onchangestate":
-                cb = user_cbs.get("on_change_state")
-                if cb:
-                    cb(self, e, str(e.dst))
-            elif callback_name == "onenterstate":
-                cb = user_cbs.get(f"on_enter_{e.dst}")
-                if cb:
-                    cb(self, e)
-            elif callback_name == "onleavestate":
-                cb = user_cbs.get(f"on_leave_{e.src}")
-                if cb:
-                    cb(self, e)
-            elif callback_name == "onafterevent":
-                cb = user_cbs.get(f"on_{e.event}")
-                if cb:
-                    cb(self, e)
-
-        return _cb
+    # ── Internal (methods below reserved for future use) ──

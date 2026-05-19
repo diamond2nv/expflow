@@ -315,9 +315,10 @@ class TestCallbacks:
         )
         fsm.dispatch()
         fsm.queue()
-        assert len(changes) >= 1
-        assert changes[0] == ("dispatch", STATE_DISPATCHED)
-        assert changes[1] == ("queue", STATE_QUEUED)
+        assert len(changes) >= 3  # startup + dispatch + queue
+        assert changes[0] == ("startup", STATE_CREATED)
+        assert changes[1] == ("dispatch", STATE_DISPATCHED)
+        assert changes[2] == ("queue", STATE_QUEUED)
 
     def test_on_error_callback(self):
         errors = []
