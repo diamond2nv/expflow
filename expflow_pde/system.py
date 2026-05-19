@@ -3,7 +3,10 @@
 """expflow system — component health checks and system utilities."""
 
 
-def check_health() -> dict[str, dict]:
+from typing import Any
+
+
+def check_health() -> dict[str, dict[str, Any]]:
     """Check measurement plane component health.
 
     Returns:

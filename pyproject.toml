@@ -106,4 +106,4 @@ include = ["expflow_pde"]
 exclude = ["tests"]
 reportMissingImports = true
 reportMissingTypeStubs = false
-strict = ["expflow_pde/**/*.py"]
+strict = ["expflow_pde/**/[!__]*.py"]

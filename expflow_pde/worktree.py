@@ -18,8 +18,44 @@ import os
 import shutil
 import subprocess
 import uuid
+from typing import TypedDict
 
 import expflow_pde.config as config
+
+# ── type aliases ──
+
+#: A CompletedProcess known to return text (not bytes).
+_Proc = subprocess.CompletedProcess[str]
+
+
+class WorktreeRecord(TypedDict):
+    """Shape of a persisted worktree registry entry."""
+    branch: str
+    worktree_path: str
+    created_at: float
+
+
+class WorktreeResult(TypedDict):
+    """Result of create_experiment_worktree."""
+    worktree_path: str
+    branch: str
+    commit_hash: str
+    experiment_id: str
+
+
+class CleanupResult(TypedDict):
+    """Result of cleanup_worktree."""
+    branch: str
+    status: str
+
+
+class StashResult(TypedDict):
+    """Result of submit_via_stash."""
+    branch: str
+    commit_hash: str
+    experiment_id: str
+    method: str
+
 
 # ── helpers ──
 
@@ -39,7 +75,7 @@ def _find_git_root(path: str | None = None) -> str:
     return result.stdout.strip()
 
 
-def _run_git(args: list[str], cwd: str, check: bool = True) -> subprocess.CompletedProcess:
+def _run_git(args: list[str], cwd: str, check: bool = True) -> _Proc:
     """Run a git command and return the result."""
     return subprocess.run(
         ["git"] + args,
@@ -51,7 +87,7 @@ def _run_git(args: list[str], cwd: str, check: bool = True) -> subprocess.Comple
     )
 
 
-def _run_quiet(cmd: list[str], cwd: str) -> subprocess.CompletedProcess:
+def _run_quiet(cmd: list[str], cwd: str) -> _Proc:
     """Run a command silently — ignore errors."""
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=30)
 
@@ -65,7 +101,7 @@ def create_experiment_worktree(
     branch_prefix: str = "exp",
     worktree_base: str | None = None,
     skip_push: bool = False,
-) -> dict:
+) -> WorktreeResult:
     """Create a temporary worktree for experiment submission.
 
     Args:
@@ -76,7 +112,7 @@ def create_experiment_worktree(
         skip_push: Skip git push (for testing).
 
     Returns:
-        Dict with 'worktree_path', 'branch', 'commit_hash'.
+        Dict with 'worktree_path', 'branch', 'commit_hash', 'experiment_id'.
 
     Raises:
         RuntimeError: If git operations fail.
@@ -157,8 +193,8 @@ def create_experiment_worktree(
         if not skip_push:
             _run_git(["push", "-u", "origin", branch], cwd=wt_path)
 
-        # 6. Get commit hash
-        commit = _run_git(["rev-parse", "HEAD"], cwd=wt_path).stdout.strip()[:8]
+        # 6. Get commit hash — strip() is safe because stdout is str
+        commit: str = _run_git(["rev-parse", "HEAD"], cwd=wt_path).stdout.strip()[:8]
 
         # 7. Record in registry for later cleanup
         _record_worktree(repo, branch, wt_path)
@@ -182,7 +218,7 @@ def cleanup_worktree(
     worktree_path: str,
     repo_path: str | None = None,
     skip_remote: bool = False,
-) -> dict:
+) -> CleanupResult:
     """Remove a worktree and its local/remote branches.
 
     Args:
@@ -207,22 +243,24 @@ def cleanup_worktree(
     return {"branch": branch, "status": "cleaned"}
 
 
-def list_worktrees(repo_path: str | None = None) -> list[dict]:
+def list_worktrees(repo_path: str | None = None) -> list[WorktreeRecord]:
     """List expflow-managed worktrees.
 
     Returns:
-        List of dicts with 'branch', 'worktree_path', 'created_at'.
+        List of WorktreeRecord dicts with 'branch', 'worktree_path', 'created_at'.
     """
     records = _load_worktree_registry(repo_path)
     # Verify each worktree still exists
-    result = []
+    result: list[WorktreeRecord] = []
     for r in records:
-        if os.path.isdir(r.get("worktree_path", "")):
+        if os.path.isdir(r["worktree_path"]):
             result.append(r)
     return result
 
 
-def cleanup_all_stale(repo_path: str | None = None, max_age_hours: int = 24) -> list[dict]:
+def cleanup_all_stale(
+    repo_path: str | None = None, max_age_hours: int = 24
+) -> list[CleanupResult]:
     """Clean all stale worktrees older than max_age_hours.
 
     Args:
@@ -235,12 +273,13 @@ def cleanup_all_stale(repo_path: str | None = None, max_age_hours: int = 24) -> 
     import time
 
     repo = repo_path or _find_git_root()
-    cleaned = []
+    cleaned: list[CleanupResult] = []
     for wt in list_worktrees(repo):
         created = wt.get("created_at", 0)
         if created and (time.time() - created) > max_age_hours * 3600:
-            result = cleanup_worktree(wt["branch"], wt["worktree_path"], repo)
-            cleaned.append(result)
+            cleaned.append(
+                cleanup_worktree(wt["branch"], wt["worktree_path"], repo)
+            )
     return cleaned
 
 
@@ -260,7 +299,7 @@ def _record_worktree(repo: str, branch: str, wt_path: str) -> None:
     import json
     import time
 
-    record = {
+    record: WorktreeRecord = {
         "branch": branch,
         "worktree_path": wt_path,
         "created_at": time.time(),
@@ -278,13 +317,13 @@ def _remove_worktree_record(branch: str) -> None:
     rpath = _registry_path(repo)
     if not os.path.isfile(rpath):
         return
-    records = []
+    records: list[WorktreeRecord] = []
     with open(rpath) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            rec = json.loads(line)
+            rec: WorktreeRecord = json.loads(line)
             if rec.get("branch") != branch:
                 records.append(rec)
     with open(rpath, "w") as f:
@@ -292,7 +331,9 @@ def _remove_worktree_record(branch: str) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
-def _load_worktree_registry(repo_path: str | None = None) -> list[dict]:
+def _load_worktree_registry(
+    repo_path: str | None = None,
+) -> list[WorktreeRecord]:
     """Load all worktree records from the registry."""
     import json
 
@@ -300,7 +341,7 @@ def _load_worktree_registry(repo_path: str | None = None) -> list[dict]:
     rpath = _registry_path(repo)
     if not os.path.isfile(rpath):
         return []
-    records = []
+    records: list[WorktreeRecord] = []
     with open(rpath) as f:
         for line in f:
             line = line.strip()
@@ -320,7 +361,7 @@ def submit_via_stash(
     script_path: str,
     repo_path: str | None = None,
     skip_push: bool = False,
-) -> dict:
+) -> StashResult:
     """Create a temporary experiment branch using git stash (lighter than worktree).
 
     Use when there are few changes and you're confident stash pop won't conflict.
@@ -351,7 +392,7 @@ def submit_via_stash(
         if not skip_push:
             _run_git(["push", "-u", "origin", branch], cwd=repo)
 
-        commit = _run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()[:8]
+        commit: str = _run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()[:8]
 
         return {
             "branch": branch,

@@ -58,6 +58,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+# pyright: ignore[reportUnsupportedDunderAll]  # names resolved via __getattr__ lazy import
 __all__ = [
     "__version__",
     "ExperimentPipeline",

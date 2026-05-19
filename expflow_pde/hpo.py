@@ -347,7 +347,7 @@ def _run_hpo_distributed(
 
 def _collect_one_trial(
     study: Any,
-    pending: list,
+    pending: list[tuple[Any, dict[str, Any], Any]],
     objective_metric: str,
     direction: str,
     optuna: Any,

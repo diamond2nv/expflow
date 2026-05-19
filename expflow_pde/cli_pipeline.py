@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any
 
 import typer
 
@@ -204,7 +204,7 @@ def submit_full_cmd(
 # ── Shared printer ──
 
 
-def _print_result(result: dict, wait: bool, timeout: float | None) -> None:
+def _print_result(result: dict[str, Any], wait: bool, timeout: float | None) -> None:
     """Pretty-print a pipeline result."""
     mode = result.get("mode", "fast")
     print(f"Pipeline submitted: {result['name']} (mode: {mode})")
