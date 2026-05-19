@@ -1,8 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""expflow compare — side-by-side experiment comparison."""
+"""expflow compare — side-by-side experiment comparison and score ranking."""
 
 from typing import Any
+
+
+def _apply_gate(value: float, operator: str, threshold: float) -> bool:
+    """Apply a gate filter to a value.
+
+    Args:
+        value: The metric value to check.
+        operator: Comparison operator (lt, le, gt, ge).
+        threshold: The threshold to compare against.
+
+    Returns:
+        True if the value passes the gate, False otherwise.
+        Unknown operators return True (pass-through).
+    """
+    if operator == "lt":
+        return value < threshold
+    elif operator == "le":
+        return value <= threshold
+    elif operator == "gt":
+        return value > threshold
+    elif operator == "ge":
+        return value >= threshold
+    return True  # Unknown operator → pass through
 
 
 def compare_tasks(task_id_a: str, task_id_b: str) -> dict[str, Any]:
