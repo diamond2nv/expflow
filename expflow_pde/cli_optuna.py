@@ -228,6 +228,10 @@ def hpo_run_cmd(
     pruner: str = typer.Option(
         "hyperband", "--pruner", help="Optuna pruner: hyperband, median, percentile, none"
     ),
+    loss: Optional[str] = typer.Option(
+        None, "--loss", "-l", help="Loss function name for training script (e.g., l2_rel, h1_1d). "
+        "Passed as --loss=<name> to the training script."
+    ),
 ) -> None:
     """Run hyperparameter optimization on a script.
 
@@ -257,6 +261,7 @@ def hpo_run_cmd(
         project=project,
         pruner=pruner_val,
         use_hpo_optimizer=optimizer,
+        loss=loss,
     )
 
     if "error" in result:

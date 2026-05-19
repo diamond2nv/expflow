@@ -87,6 +87,77 @@ Key flags across all HPO modes:
 - `--metric <name>`: reads `METRIC:<name>=<value>` from script stdout
 - `--direction maximize|minimize`
 - `--timeout <min>`: safety cutoff
+- `--loss <name>` (expflow v0.4.0+): inject `--loss=<name>` into training script (e.g. `l2_rel`, `h1_1d`)
+
+## PDE-Specialized Loss Functions (expflow v0.4.0+)
+
+Starting from expflow v0.4.0, PDE-specific loss functions are integrated
+directly into `expflow_pde/losses.py` — use the standardised CLI and API
+instead of hand-copying from HyperNOs.
+
+### Available Loss Functions
+
+| CLI Name | Class | Description | Use Case |
+|:--------:|:-----:|-------------|----------|
+| `l1_rel` | `LprelLoss(p=1)` | Relative L1 norm | Robust to outliers |
+| `l2_rel` | `LprelLoss(p=2)` | **Relative L2 (default)** | Competition Rel-MSE squared root |
+| `h1_1d` | `H1relLoss_1D` | FFT-weighted Sobolev 1D | Suppress high-freq oscillations |
+| `h1_2d` | `H1relLoss` | FFT-weighted Sobolev 2D | 2D PDE smoothness (Navier-Stokes) |
+| `mse_rel` | `MSELoss_rel` | Normalised MSE | Simple & effective |
+| `smoothl1_rel` | `SmoothL1Loss_rel` | Robust Smooth L1 | Noisy data |
+| `l2_abs` | `lpLoss(p=2)` | Absolute L2 baseline | No normalisation |
+| `mse_abs` | `nn.MSELoss()` | Standard Torch MSE | Original PDEBench default |
+
+### CLI interaction
+
+```bash
+# List all available loss functions
+expflow analyze losses
+
+# Show details for a specific loss (params, use case)
+expflow analyze losses h1_1d
+
+# Use with HPO — loss name is injected as --loss=<name> to training script
+expflow optuna run train_task1.py --loss l2_rel --trials 50 --distributed --queue gpu_queue
+
+# Custom H1 parameters via loss_selector kwargs (from Python)
+from expflow_pde.losses import loss_selector
+loss_fn = loss_selector("h1_1d", beta=2.0, size_mean=True)
+```
+
+### Training Script Integration Pattern
+
+Training scripts should accept `--loss` CLI argument:
+
+```python
+from expflow_pde.losses import loss_selector
+
+parser.add_argument("--loss", default="l2_rel", help="Loss function name")
+loss_fn = loss_selector(args.loss, size_mean=True)
+
+# During training
+output = model(x)
+loss = loss_fn(output, y)
+loss.backward()
+```
+
+### Key Differences from HyperNOs Original
+
+| Aspect | HyperNOs | expflow v0.4.0 |
+|--------|----------|----------------|
+| Base class | Plain class | `nn.Module` (clearml/optuna compatible) |
+| Type annotations | `beartype` + `jaxtyped` | Standard PEP8 type hints |
+| Chebyshev variants | 4 classes | ❌ Omitted (not needed for Burgers) |
+| Multi-patch variants | 3 classes | ❌ Omitted |
+| Multi-output variants | 3 classes | Omitted (single-channel focused) |
+| `size_mean` default | `False` (sum) | `True` (mean) — matches typical ML practice |
+| Division-by-zero guard | Raises `ValueError` | Clamps to 1e-7, silently continues |
+
+### Legacy HyperNOs Library
+
+If you need loss functions not provided by expflow (Chebyshev variants,
+multi-patch, physics residuals), the original HyperNOs source is at
+`~/Gitlab/Agentic4Sci/HyperNOs/hypernos/loss_fun.py` (17 classes).
 
 ## Script Requirements
 

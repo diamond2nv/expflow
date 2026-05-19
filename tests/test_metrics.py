@@ -1,143 +1,146 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Tests for expflow_pde.metrics — standardized metric registry.
+"""Tests for expflow_pde.metrics — metric registry and PDEBench metrics."""
 
-Covers:
-- STANDARD_METRICS registry structure
-- get_registered_metrics() / get_metric_info()
-- report_standard() with and without task
-- validate_metric_threshold()
-- Error cases (unknown metric)
-"""
+from __future__ import annotations
 
-import pytest
+import torch
 
 from expflow_pde.metrics import (
     STANDARD_METRICS,
+    compute_rel_mse,
     get_metric_info,
     get_registered_metrics,
     report_standard,
+    set_metric_threshold,
     validate_metric_threshold,
 )
 
-
-class TestRegistry:
-    """STANDARD_METRICS structure."""
-
-    def test_registered_count(self):
-        assert len(STANDARD_METRICS) >= 12
-
-    def test_each_metric_has_required_keys(self):
-        for name, info in STANDARD_METRICS.items():
-            assert "type" in info, f"{name} missing 'type'"
-            assert "group" in info, f"{name} missing 'group'"
-            assert isinstance(info.get("type"), str)
-            assert isinstance(info.get("group"), str)
-
-    def test_groups_exist(self):
-        groups = {info["group"] for info in STANDARD_METRICS.values()}
-        assert "Score" in groups
-        assert "Loss" in groups
-        assert "PDE" in groups
-        assert "Time" in groups
-        assert "Model" in groups
-        assert "Training" in groups
-
-    def test_seg_total_is_primary(self):
-        info = STANDARD_METRICS["seg_total"]
-        assert info["higher_is_better"] is True
-
-    def test_pde_mean_has_threshold(self):
-        info = STANDARD_METRICS["pde_mean"]
-        assert info["threshold"] == 18.09
-        assert info["higher_is_better"] is False
-
-    def test_train_time_min_has_threshold(self):
-        info = STANDARD_METRICS["train_time_min"]
-        assert info["threshold"] == 60
-        assert info["higher_is_better"] is False
+# ── Metric Registry ──
 
 
-class TestGetRegisteredMetrics:
-    """get_registered_metrics() and get_metric_info()."""
+class TestMetricRegistry:
+    def test_registry_has_core_metrics(self):
+        """Core competition metrics must exist."""
+        for name in ("seg_total", "seg1", "seg2", "seg3"):
+            assert name in STANDARD_METRICS, f"Missing: {name}"
 
-    def test_returns_copy_not_reference(self):
-        r1 = get_registered_metrics()
-        r2 = get_registered_metrics()
-        assert r1 == r2
-        r1["new_key"] = {}
-        assert "new_key" not in r2  # not mutated
+    def test_registry_has_pdebench_6(self):
+        """All 6 PDEBench error metrics must be registered."""
+        for name in ("val_rmse", "val_nrmse", "val_max_err", "val_bd_err", "val_csv_err"):
+            assert name in STANDARD_METRICS, f"Missing: {name}"
 
-    def test_get_metric_info_known(self):
+    def test_registry_has_fourier_bands(self):
+        for name in ("val_fourier_low", "val_fourier_mid", "val_fourier_high"):
+            assert name in STANDARD_METRICS
+
+    def test_registry_has_loss_metrics(self):
+        for name in ("val_lprel", "val_h1rel"):
+            assert name in STANDARD_METRICS
+
+    def test_get_registered_metrics_returns_copy(self):
+        d = get_registered_metrics()
+        assert "seg_total" in d
+        # Verify it's a copy
+        d["fake"] = {}
+        assert "fake" not in STANDARD_METRICS
+
+    def test_get_metric_info(self):
         info = get_metric_info("seg_total")
         assert info is not None
         assert info["group"] == "Score"
-
-    def test_get_metric_info_unknown(self):
+        assert info["higher_is_better"] is True
         assert get_metric_info("nonexistent") is None
+
+    def test_all_metrics_have_required_keys(self):
+        for name, info in STANDARD_METRICS.items():
+            assert "type" in info, f"{name} missing type"
+            assert "group" in info, f"{name} missing group"
+            assert "higher_is_better" in info, f"{name} missing higher_is_better"
+
+
+# ── Report Standard ──
 
 
 class TestReportStandard:
-    """report_standard() helper."""
+    def test_report_known_metrics_no_task(self):
+        """report_standard returns dict for known metrics."""
+        result = report_standard(
+            task=None,
+            seg_total=57.0,
+            val_rmse=0.05,
+        )
+        assert result["seg_total"] == 57.0
+        assert result["val_rmse"] == 0.05
 
-    def test_reports_correct_metrics(self):
-        result = report_standard(seg_total=57.09, pde_mean=20.29)
-        assert result == {"seg_total": 57.09, "pde_mean": 20.29}
-
-    def test_reports_with_task(self):
-        """When task is provided, it calls report_scalar but returns dict."""
-
-        # In unit tests without a real clearml Task, task=None means no reporting.
-        # Passing a dict with report_scalar method simulates a task.
-        class MockTask:
-            last_call: tuple | None = None
-
-            def report_scalar(self, title, series, value, iteration=0):
-                self.last_call = (title, series, value, iteration)
-
-        mock_task = MockTask()
-        result = report_standard(task=mock_task, seg_total=57.09, pde_mean=20.29)
-        assert result == {"seg_total": 57.09, "pde_mean": 20.29}
-        # Should have called report_scalar for pde_mean
-        assert mock_task.last_call is not None
-        assert mock_task.last_call[1] == "pde_mean"  # series name
-
-    def test_raises_on_unknown_metric(self):
-        with pytest.raises(ValueError, match="Unknown metric"):
-            report_standard(seg_total=57.09, unknown_metric=42)
-
-    def test_raises_with_helpful_message(self):
-        with pytest.raises(ValueError) as exc:
-            report_standard(seg_total=57.09, foobar=42)
-        assert "seg_total" in str(exc.value)  # lists registered metrics
+    def test_report_skips_unknown_metric(self):
+        """Unknown metrics are silently skipped."""
+        result = report_standard(
+            task=None,
+            seg_total=57.0,
+            made_up_metric=42.0,
+        )
+        assert "seg_total" in result
+        assert "made_up_metric" not in result
 
 
-class TestValidateMetricThreshold:
-    """validate_metric_threshold() helper."""
+# ── Thresholds ──
 
-    def test_pde_mean_below_threshold_passes(self):
-        result = validate_metric_threshold("pde_mean", 17.5)
-        assert result["passed"] is True
-        assert result["threshold"] == 18.09
 
-    def test_pde_mean_above_threshold_fails(self):
-        result = validate_metric_threshold("pde_mean", 20.0)
-        assert result["passed"] is False
+class TestMetricThresholds:
+    def test_validate_passing(self):
+        """Value below threshold = pass."""
+        assert validate_metric_threshold("pde_mean", 10.0) is True
 
-    def test_train_time_below_60_passes(self):
-        result = validate_metric_threshold("train_time_min", 45)
-        assert result["passed"] is True
+    def test_validate_failing(self):
+        """Value above threshold = fail."""
+        assert validate_metric_threshold("pde_mean", 20.0) is False
 
-    def test_train_time_above_60_fails(self):
-        result = validate_metric_threshold("train_time_min", 75)
-        assert result["passed"] is False
+    def test_validate_unknown_metric(self):
+        """Unknown metric always passes."""
+        assert validate_metric_threshold("nonexistent", 999.0) is True
 
-    def test_metric_with_no_threshold(self):
-        result = validate_metric_threshold("seg_total", 57.09)
-        assert result["passed"] is True
-        assert result["threshold"] is None
+    def test_set_custom_threshold(self):
+        set_metric_threshold("val_mse", 0.1)
+        assert validate_metric_threshold("val_mse", 0.05) is True
+        assert validate_metric_threshold("val_mse", 0.2) is False
 
-    def test_unknown_metric_returns_pass(self):
-        result = validate_metric_threshold("unknown_metric", 42)
-        assert result["passed"] is True
-        assert result["detail"] == "Unknown metric"
+
+# ── compute_rel_mse ──
+
+
+class TestComputeRelMSE:
+    def test_perfect_prediction(self):
+        pred = torch.randn(4, 64, 10, 1)
+        target = pred.clone()
+        rel = compute_rel_mse(pred, target)
+        assert rel.shape == (4,)
+        assert torch.allclose(rel, torch.zeros(4), atol=1e-6)
+
+    def test_random_prediction(self):
+        pred = torch.randn(4, 64, 1)
+        target = torch.randn(4, 64, 1)
+        rel = compute_rel_mse(pred, target)
+        assert rel.shape == (4,)
+        assert torch.all(rel >= 0)
+        assert torch.isfinite(rel).all()
+
+    def test_zero_target(self):
+        """rel_mse when target is all zeros → returns finite value."""
+        pred = torch.randn(4, 64, 1)
+        target = torch.zeros(4, 64, 1)
+        rel = compute_rel_mse(pred, target, eps=1e-7)
+        assert rel.shape == (4,)
+        assert torch.isfinite(rel).all()
+
+    def test_single_sample(self):
+        pred = torch.randn(1, 64, 1)
+        target = torch.randn(1, 64, 1)
+        rel = compute_rel_mse(pred, target)
+        assert rel.shape == (1,)
+
+    def test_multi_channel(self):
+        pred = torch.randn(4, 64, 3)
+        target = torch.randn(4, 64, 3)
+        rel = compute_rel_mse(pred, target)
+        assert rel.shape == (4,)

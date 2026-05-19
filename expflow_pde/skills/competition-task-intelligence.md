@@ -243,6 +243,10 @@ expflow analyze equations                # All equations
 expflow analyze equations --task competition  # Only competition
 expflow analyze equations kuramoto_sivashinsky  # Single equation
 
+# Loss function catalog (expflow v0.4.0+)
+expflow analyze losses                   # List all 8 PDE loss functions
+expflow analyze losses h1_1d             # Show details + params
+
 # Competition overview
 expflow analyze status
 ```

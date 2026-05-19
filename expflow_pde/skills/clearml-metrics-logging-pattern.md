@@ -35,6 +35,10 @@ version: 1.0.0
 | ✅ Filled | Physics Loss | **Loss/Physics** | train_task1_phys.py via _phys_ema | ✅ |
 | ✅ Filled | GPU Memory | **System/GPU Alloc MB** | train_task1.py, train_task1_phys.py, train_task1_unroll.py | ✅ |
 | ✅ Filled | Learning Rate | **System/LR** | 所有 4 个训练脚本 | ✅ |
+| 🔄 NEW v0.4.0 | Val Lprel | **Loss/Val Lprel** | expflow_pde.losses.LprelLoss | 可用 |
+| 🔄 NEW v0.4.0 | Val H1rel | **Loss/Val H1rel** | expflow_pde.losses.H1relLoss | 可用 |
+| 🔄 NEW v0.4.0 | Val RMSE | **Error/Val RMSE** | expflow_pde.metrics.compute_pdebench_metrics | 可用 |
+| 🔄 NEW v0.4.0 | Val NRMSE | **Error/Val NRMSE** | expflow_pde.metrics.compute_pdebench_metrics | 可用 |
 
 ## 标准化 metric 命名约定
 

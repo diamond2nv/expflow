@@ -252,5 +252,98 @@ def analyze_help_cmd() -> None:
     print("  task <id>         详细分析任务 (task1/task2/task3)")
     print("  equations [name]  列出所有PDE方程 / 查看单个方程详情")
     print("  equations --task <t>  按任务过滤方程 (task1/2/3/competition)")
+    print("  losses            列出所有可用损失函数及其参数")
     print("  status            竞赛全局状态概览")
     print("  advise            战略建议 (聚焦哪个任务、日程安排)")
+
+
+@analyze_app.command("losses")
+def losses_cmd(
+    name: Optional[str] = typer.Argument(
+        None, help="Show details for a specific loss function"
+    ),
+) -> None:
+    """List all available PDE loss functions or show details for one."""
+    from expflow_pde.losses import (
+        H1relLoss,
+        H1relLoss_1D,
+        LprelLoss,
+        MSELoss_rel,
+        SmoothL1Loss_rel,
+        loss_selector,
+        lpLoss,
+    )
+
+    loss_info = {
+        "l1_rel": {
+            "class": "LprelLoss(p=1)",
+            "desc": "Relative L1 norm loss: ||x-y||_1 / ||y||_1",
+            "params": "p=1 (fixed), size_mean=True|False|None",
+            "use_case": "核心 — Rel-L1, 对异常值鲁棒",
+        },
+        "l2_rel": {
+            "class": "LprelLoss(p=2)",
+            "desc": "Relative L2 norm loss: ||x-y||_2 / ||y||_2",
+            "params": "p=2 (fixed), size_mean=True|False|None",
+            "use_case": "核心 — 竞赛 Rel-MSE 的平方根形式, 默认推荐",
+        },
+        "h1_1d": {
+            "class": "H1relLoss_1D(beta, alpha)",
+            "desc": "H1 Sobolev loss for 1D via FFT: alpha*I + beta*k^2",
+            "params": "beta=1.0, alpha=1.0, size_mean=True|False|None",
+            "use_case": "Burgers FNO — 抑制高频震荡, 理想的光滑解损失",
+        },
+        "h1_2d": {
+            "class": "H1relLoss(beta, alpha)",
+            "desc": "H1 Sobolev loss for 2D via FFT: alpha + beta*(kx^2+ky^2)",
+            "params": "beta=1.0, alpha=1.0, size_mean=True|False|None",
+            "use_case": "2D PDE — Navier-Stokes, Darcy 等",
+        },
+        "mse_rel": {
+            "class": "MSELoss_rel",
+            "desc": "Relative MSE: MSE(x,y) / MSE(0,y)",
+            "params": "size_mean=True|False|None",
+            "use_case": "简单有效的归一化 MSE",
+        },
+        "smoothl1_rel": {
+            "class": "SmoothL1Loss_rel",
+            "desc": "Relative Smooth L1: SmoothL1(x,y) / SmoothL1(0,y)",
+            "params": "size_mean=True|False|None",
+            "use_case": "对大误差鲁棒, 适合噪声数据",
+        },
+        "l2_abs": {
+            "class": "lpLoss(p=2)",
+            "desc": "Absolute L2 norm: ||x-y||_2",
+            "params": "p=2 (fixed), size_mean=True|False|None",
+            "use_case": "参考基线, 无归一化",
+        },
+        "mse_abs": {
+            "class": "nn.MSELoss",
+            "desc": "Standard torch MSE loss",
+            "params": "无 (使用默认 reduction='mean')",
+            "use_case": "参考基线 — 当前 PDEBench 默认损失",
+        },
+    }
+
+    if name:
+        info = loss_info.get(name)
+        if info is None:
+            print(f"Unknown loss: {name}")
+            print(f"Available: {', '.join(loss_info.keys())}")
+            return
+        print(f"  {name}")
+        print(f"  {'─' * 50}")
+        print(f"  Class:  {info['class']}")
+        print(f"  Desc:   {info['desc']}")
+        print(f"  Params: {info['params']}")
+        print(f"  Usage:  {info['use_case']}")
+        return
+
+    # List all
+    print(f"{'Name':<16} {'Class':<30} {'Description':<50}")
+    print(f"{'─' * 96}")
+    for key, info in loss_info.items():
+        print(f"{key:<16} {info['class']:<30} {info['desc']:<50}")
+    print()
+    print("  Details: expflow analyze losses <name>")
+    print("  Usage:   expflow optuna run script.py --loss l2_rel")

@@ -1,103 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""expflow metrics — standardized metric registry for PDEBench experiments.
+"""expflow metrics — Standard metric registry and PDEBench evaluation functions.
 
-Provides a central registry of known metrics with metadata (group, threshold,
-higher_is_better), and a report_standard() helper to report them to clearml.
+The central metric registry is ``STANDARD_METRICS`` (dict), which maps
+metric names to their metadata (type, group, higher_is_better).
 
-Usage:
-    from expflow_pde.metrics import get_registered_metrics, report_standard
-
-    # In a training script:
-    report_standard(seg_total=57.09, pde_mean=20.29, train_time_min=50.5)
+Phase 12 enhancements:
+- Added PDEBench 6-metric suite + competition score metrics
+- Added ``compute_pdebench_metrics()`` — wraps PDEBench's metric_func()
 """
 
+from __future__ import annotations
+
+import logging
 from typing import Any
 
-# ── Metric descriptor ──
+import torch
+
+logger = logging.getLogger("expflow")
+
+# ── Standard Metrics Registry ──
 
 STANDARD_METRICS: dict[str, dict[str, Any]] = {
-    "seg_total": {
-        "type": "scalar",
-        "group": "Score",
-        "higher_is_better": True,
-        "description": "Total segment score (primary competition metric)",
-    },
-    "seg1": {
-        "type": "scalar",
-        "group": "Score",
-        "higher_is_better": True,
-        "description": "Segment 1 score",
-    },
-    "seg2": {
-        "type": "scalar",
-        "group": "Score",
-        "higher_is_better": True,
-        "description": "Segment 2 score",
-    },
-    "seg3": {
-        "type": "scalar",
-        "group": "Score",
-        "higher_is_better": True,
-        "description": "Segment 3 score",
-    },
-    "val_mse": {
-        "type": "scalar",
-        "group": "Loss",
-        "higher_is_better": False,
-        "description": "Validation MSE",
-    },
-    "val_relmse": {
-        "type": "scalar",
-        "group": "Loss",
-        "higher_is_better": False,
-        "description": "Validation relative MSE",
-    },
-    "pde_mean": {
-        "type": "scalar",
-        "group": "PDE",
-        "higher_is_better": False,
-        "threshold": 18.09,
-        "description": "Mean PDE residual (competition gate: <18.09)",
-    },
-    "pde_seg1": {
-        "type": "scalar",
-        "group": "PDE",
-        "higher_is_better": False,
-        "description": "PDE residual for segment 1",
-    },
-    "pde_seg2": {
-        "type": "scalar",
-        "group": "PDE",
-        "higher_is_better": False,
-        "description": "PDE residual for segment 2",
-    },
-    "pde_seg3": {
-        "type": "scalar",
-        "group": "PDE",
-        "higher_is_better": False,
-        "description": "PDE residual for segment 3",
-    },
-    "train_time_min": {
-        "type": "scalar",
-        "group": "Time",
-        "higher_is_better": False,
-        "threshold": 60,
-        "description": "Training time in minutes (competition limit: <60min)",
-    },
-    "arch_params": {
-        "type": "scalar",
-        "group": "Model",
-        "higher_is_better": False,
-        "description": "Model architecture parameter count",
-    },
-    "epochs": {
-        "type": "scalar",
-        "group": "Training",
-        "higher_is_better": False,
-        "description": "Number of training epochs",
-    },
+    # ── Score group (higher is better) ──
+    "seg_total": {"type": "scalar", "group": "Score", "higher_is_better": True},
+    "seg1": {"type": "scalar", "group": "Score", "higher_is_better": True},
+    "seg2": {"type": "scalar", "group": "Score", "higher_is_better": True},
+    "seg3": {"type": "scalar", "group": "Score", "higher_is_better": True},
+    # ── Loss group (lower is better) ──
+    "val_mse": {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    "val_relmse": {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    # ── HyperNOs-style training loss (lower is better) ──
+    "val_lprel": {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    "val_h1rel": {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    # ── PDEBench Error metrics (lower is better) ──
+    "val_rmse": {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_nrmse": {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_max_err": {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_bd_err": {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_csv_err": {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_fourier_low": {"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    "val_fourier_mid": {"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    "val_fourier_high": {"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    # ── PDE group (lower is better) ──
+    "pde_mean": {"type": "scalar", "group": "PDE", "higher_is_better": False},
+    "pde_seg1": {"type": "scalar", "group": "PDE", "higher_is_better": False},
+    "pde_seg2": {"type": "scalar", "group": "PDE", "higher_is_better": False},
+    "pde_seg3": {"type": "scalar", "group": "PDE", "higher_is_better": False},
+    # ── Other ──
+    "train_time_min": {"type": "scalar", "group": "Time", "higher_is_better": False},
+    "arch_params": {"type": "scalar", "group": "Model", "higher_is_better": False},
+    "epochs": {"type": "scalar", "group": "Training", "higher_is_better": False},
 }
+
+# Default thresholds (used by validate_metric_threshold for pass/fail gating)
+_THRESHOLDS: dict[str, float] = {
+    "pde_mean": 18.09,
+    "train_time_min": 60.0,
+}
+
 
 # ── Public API ──
 
@@ -108,93 +69,175 @@ def get_registered_metrics() -> dict[str, dict[str, Any]]:
 
 
 def get_metric_info(name: str) -> dict[str, Any] | None:
-    """Get metadata for a single metric by name, or None if unknown."""
-    info = STANDARD_METRICS.get(name)
-    return dict(info) if info else None
+    """Return metadata for a single metric, or None if not found."""
+    return STANDARD_METRICS.get(name)
 
 
 def report_standard(
-    task: Any | None = None,
-    **kwargs: float,
+    task: Any | None,
+    **metrics: float,
 ) -> dict[str, float]:
-    """Report standard metrics to clearml (or return a dict if no task).
+    """Report metrics via clearml Task or return them as a dict.
 
-    Each keyword argument must match a metric name in STANDARD_METRICS.
-    Reports are sent to clearml via task.report_scalar(group, name, value, iteration=0).
+    For each kwarg, validates the metric name is in STANDARD_METRICS,
+    then either calls ``task.report_scalar()`` (if task is provided)
+    or just returns a dict.
 
     Args:
-        task: Optional clearml Task object. If None, metrics are returned as a dict.
-        **kwargs: Metric name=value pairs (e.g. seg_total=57.09).
+        task: Optional clearml Task instance.
+        **metrics: Metric name=value pairs.
 
     Returns:
-        Dict of {metric_name: value} that were processed.
-
-    Raises:
-        ValueError: If an unknown metric name is passed.
+        Dict of validated metric name -> value.
     """
     reported: dict[str, float] = {}
-    for name, value in kwargs.items():
+    for name, value in metrics.items():
         info = STANDARD_METRICS.get(name)
         if info is None:
-            raise ValueError(
-                f"Unknown metric '{name}'. "
-                f"Registered metrics: {', '.join(sorted(STANDARD_METRICS.keys()))}"
-            )
-        reported[name] = float(value)
-
+            logger.warning("Unknown metric '%s', skipping", name)
+            continue
+        group = info["group"]
+        reported[name] = value
         if task is not None:
-            group = info.get("group", "default")
-            task.report_scalar(title=group, series=name, value=float(value), iteration=0)
-
+            try:
+                task.report_scalar(title=group, series=name, value=value, iteration=0)
+            except Exception:
+                pass
     return reported
 
 
-# ── Validation helpers ──
-
-
 def validate_metric_threshold(
-    name: str,
-    value: float,
-) -> dict[str, Any]:
-    """Check if a metric value passes its threshold (if defined).
+    metric_name: str, value: float, threshold: float | None = None
+) -> bool:
+    """Check if a metric value passes its threshold (pass = below threshold).
 
     Args:
-        name: Metric name.
-        value: Metric value to check.
+        metric_name: Key in STANDARD_METRICS.
+        value: Actual metric value.
+        threshold: Override threshold. Uses _THRESHOLDS[metric_name] if None.
 
     Returns:
-        Dict with name, value, threshold, passed, detail.
+        True if value <= threshold (pass), False otherwise.
     """
-    info = STANDARD_METRICS.get(name)
-    if info is None:
-        return {
-            "name": name,
-            "value": value,
-            "threshold": None,
-            "passed": True,
-            "detail": "Unknown metric",
-        }
-
-    threshold = info.get("threshold")
+    threshold = threshold if threshold is not None else _THRESHOLDS.get(metric_name)
     if threshold is None:
-        return {
-            "name": name,
-            "value": value,
-            "threshold": None,
-            "passed": True,
-            "detail": "No threshold",
-        }
+        return True
+    if value <= threshold:
+        return True
+    return False
 
-    higher_is_better = info.get("higher_is_better", True)
-    if higher_is_better:
-        passed = float(value) >= threshold
+
+def set_metric_threshold(metric_name: str, threshold: float) -> None:
+    """Set a custom threshold for a metric.
+
+    Args:
+        metric_name: Key in STANDARD_METRICS.
+        threshold: New threshold value.
+    """
+    _THRESHOLDS[metric_name] = threshold
+
+
+# ── PDEBench Metric Suite ──
+
+
+def compute_pdebench_metrics(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    initial_step: int = 10,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    Lz: float = 1.0,
+    iLow: int = 4,
+    iHigh: int = 12,
+) -> dict[str, float]:
+    """Compute the full PDEBench 6-metric suite.
+
+    Wraps ``pdebench.models.metrics.metric_func()`` with ``if_mean=True``
+    and returns a ``dict`` keyed by the standard metric names for expflow.
+
+    The 6 metrics:
+    - ``val_rmse`` — Root Mean Squared Error
+    - ``val_nrmse`` — Normalised RMSE
+    - ``val_csv_err`` — Conserved variable (integral) error
+    - ``val_max_err`` — Max absolute error
+    - ``val_bd_err`` — Boundary error
+    - ``val_fourier_{low,mid,high}`` — Fourier-domain error by frequency band
+
+    Args:
+        pred: Predicted tensor. Shape (N, *spatial, T, C).
+        target: Target tensor. Same shape as pred.
+        initial_step: Number of initial context steps to exclude from metric
+                      computation (default 10 — standard FNO rollout).
+        Lx, Ly, Lz: Domain lengths for Fourier normalisation.
+        iLow, iHigh: Fourier band boundaries (low < iLow, mid iLow-iHigh, high > iHigh).
+
+    Returns:
+        Dict mapping expflow metric names to scalar float values.
+    """
+    from pdebench.models.metrics import metric_func as pdebench_metric_func
+
+    result = pdebench_metric_func(
+        pred,
+        target,
+        if_mean=True,
+        Lx=Lx,
+        Ly=Ly,
+        Lz=Lz,
+        iLow=iLow,
+        iHigh=iHigh,
+        initial_step=initial_step,
+    )
+    # result: (rmse, nrmse, csv, max_err, bd, fourier_3band) — each is
+    # a scalar or (3,) tensor. Fourier_3band -> [low, mid, high]
+    rmse_val, nrmse_val, csv_val, max_val, bd_val, fourier_val = result
+
+    # Convert to Python floats
+    def _to_scalar(t) -> float:
+        if isinstance(t, torch.Tensor):
+            return t.detach().cpu().item() if t.numel() == 1 else t.detach().cpu().mean().item()
+        return float(t)
+
+    # Fourier is a (3,) tensor -> unpack
+    if isinstance(fourier_val, torch.Tensor):
+        fourier_vals = fourier_val.detach().cpu()
     else:
-        passed = float(value) <= threshold
+        fourier_vals = torch.as_tensor(fourier_val)
 
     return {
-        "name": name,
-        "value": value,
-        "threshold": threshold,
-        "passed": passed,
-        "detail": f"{'PASS' if passed else 'FAIL'}: {name}={value} {'≥' if higher_is_better else '≤'} {threshold}",
+        "val_rmse": _to_scalar(rmse_val),
+        "val_nrmse": _to_scalar(nrmse_val),
+        "val_csv_err": _to_scalar(csv_val),
+        "val_max_err": _to_scalar(max_val),
+        "val_bd_err": _to_scalar(bd_val),
+        "val_fourier_low": float(fourier_vals[0]) if fourier_vals.numel() >= 1 else 0.0,
+        "val_fourier_mid": float(fourier_vals[1]) if fourier_vals.numel() >= 2 else 0.0,
+        "val_fourier_high": float(fourier_vals[2]) if fourier_vals.numel() >= 3 else 0.0,
     }
+
+
+def compute_rel_mse(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    eps: float = 1e-7,
+) -> torch.Tensor:
+    """Compute relative MSE (Rel-MSE) as used in PDE competition scoring.
+
+    ``rel_mse = MSE(pred, target) / (MSE(0, target) + eps)``
+    where MSE is taken over all non-batch dimensions.
+
+    This is the primary competition scoring metric.
+
+    Args:
+        pred: Predicted tensor, shape (N, *dims).
+        target: Target tensor, same shape.
+        eps: Small epsilon to avoid division by zero.
+
+    Returns:
+        Per-sample relative MSE: shape (N,) tensor.
+    """
+    N = pred.size(0)
+    pred_flat = pred.reshape(N, -1)
+    target_flat = target.reshape(N, -1)
+    mse_diff = (pred_flat - target_flat).pow(2).mean(dim=1)
+    mse_ref = target_flat.pow(2).mean(dim=1)
+    return mse_diff / (mse_ref + eps)

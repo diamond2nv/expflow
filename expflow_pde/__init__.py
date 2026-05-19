@@ -8,7 +8,7 @@ SDK-specific features (clearml, optuna, langfuse) are loaded on demand.
 
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # ── Lazy import helpers ──
 # clearml/optuna/langfuse SDKs are optional dependencies.
@@ -62,6 +62,10 @@ def __getattr__(name: str):
 __all__ = [
     "__version__",
     "ExperimentPipeline",
+    "loss_selector",
+    "LprelLoss",
+    "H1relLoss",
+    "H1relLoss_1D",
     "annotate_compliance",
     "dataset_download",
     "dataset_lineage",

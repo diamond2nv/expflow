@@ -119,7 +119,19 @@ STANDARD_METRICS = {
         "higher_is_better": False,
         "threshold": 60,  # Competition limit
     },
-    # ... 13 total metrics across Score/Loss/PDE/Time/Model/Training groups
+    # New in v0.4.0 — PDEBench 6-metric suite
+    "val_rmse":       {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_nrmse":      {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_max_err":    {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_bd_err":     {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_csv_err":    {"type": "scalar", "group": "Error", "higher_is_better": False},
+    "val_fourier_low":{"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    "val_fourier_mid":{"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    "val_fourier_high":{"type": "scalar", "group": "Fourier", "higher_is_better": False},
+    # New in v0.4.0 — HyperNOs-style training losses
+    "val_lprel":      {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    "val_h1rel":      {"type": "scalar", "group": "Loss", "higher_is_better": False},
+    # ... 21+ total metrics across Score/Loss/Error/Fourier/PDE/Time/Model/Training groups
 }
 ```
 
@@ -129,7 +141,9 @@ STANDARD_METRICS = {
 def report_standard(task: Any | None = None, **kwargs: float) -> dict[str, float]:
     """Report metrics to clearml or return dict if no task.
     
-    Raises ValueError on unknown metric names.
+    Args:
+        task: Optional clearml Task instance.
+        **kwargs: Metric name=value pairs (unknown names are logged as warning, not error).
     """
     reported = {}
     for name, value in kwargs.items():

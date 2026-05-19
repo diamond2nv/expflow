@@ -109,6 +109,7 @@ def run_hpo(
     project: str = "PDEBench",
     pruner: str | None = "hyperband",
     use_hpo_optimizer: bool = False,
+    loss: str | None = None,
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -150,6 +151,7 @@ def run_hpo(
             timeout_minutes=timeout_minutes,
             queue=queue or "default",
             project=project,
+            loss=loss,
         )
 
     if distributed:
@@ -165,6 +167,7 @@ def run_hpo(
             queue=queue or "default",
             project=project,
             pruner=pruner,
+            loss=loss,
         )
 
     return _run_hpo_local(
@@ -178,6 +181,7 @@ def run_hpo(
         objective_metric=objective_metric,
         timeout_minutes=timeout_minutes,
         pruner=pruner,
+        loss=loss,
     )
 
 
@@ -195,6 +199,7 @@ def _run_hpo_local(
     objective_metric: str,
     timeout_minutes: float | None,
     pruner: str | None = "hyperband",
+    loss: str | None = None,
 ) -> dict[str, Any]:
     """Run HPO locally on this machine."""
     optuna = _import_optuna()
@@ -230,7 +235,7 @@ def _run_hpo_local(
         trial = study.ask()
         params = _suggest_params(trial, search_space)
         try:
-            value = _run_trial_local(script, params, objective_metric)
+            value = _run_trial_local(script, params, objective_metric, loss=loss)
             if value is not None:
                 study.tell(trial=trial, values=value)
                 completed += 1
@@ -262,6 +267,7 @@ def _run_hpo_distributed(
     queue: str,
     project: str,
     pruner: str | None = "hyperband",
+    loss: str | None = None,
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode)."""
     from clearml import Task
@@ -320,6 +326,8 @@ def _run_hpo_distributed(
         )
         for k, v in params.items():
             trial_task.set_parameter(f"Args/--{k}", str(v))
+        if loss is not None:
+            trial_task.set_parameter("Args/--loss", loss)
         trial_task.enqueue(queue)
         pending.append((trial, params, trial_task))
 
@@ -411,6 +419,7 @@ def _run_hpo_optimizer(
     timeout_minutes: float | None,
     queue: str,
     project: str,
+    loss: str | None = None,
 ) -> dict[str, Any]:
     """Run HPO via ClearML HyperParameterOptimizer.
 
@@ -617,11 +626,13 @@ def _suggest_params(trial: Any, search_space: dict[str, dict[str, Any]]) -> dict
     return params
 
 
-def _run_trial_local(script: str, params: dict[str, Any], objective_metric: str) -> float | None:
+def _run_trial_local(script: str, params: dict[str, Any], objective_metric: str, loss: str | None = None) -> float | None:
     """Run a single trial locally."""
     cmd = [script]
     for k, v in params.items():
         cmd.append(f"--{k}={v}")
+    if loss is not None:
+        cmd.append(f"--loss={loss}")
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
 
