@@ -350,9 +350,12 @@ def main() -> None:
 
     Catches KeyboardInterrupt (Ctrl+C) so the user always sees
     a clean "Aborted." message instead of a raw traceback.
-    Also catches SystemExit from Typer (normal exit) and
-    unhandled Exception from plugins/callbacks so the script
-    never dumps a raw traceback to a CLI user.
+    Also catches unhandled Exception from plugins/callbacks so
+    the script never dumps a raw traceback to a CLI user.
+
+    Note: SystemExit (from Typer's normal exit / sys.exit) is NOT
+    caught — it inherits from BaseException, not Exception, so it
+    propagates naturally and correctly terminates the process.
     """
     try:
         app()
@@ -360,8 +363,6 @@ def main() -> None:
         print()
         print("Aborted.")
         sys.exit(130)
-    except SystemExit:
-        raise  # Re-raise Typer's normal exit
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

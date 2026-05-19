@@ -386,13 +386,12 @@ def main() -> None:
     except KeyboardInterrupt:
         print("Aborted.")
         sys.exit(130)
-    except SystemExit:
-        raise   # Re-raise Typer's normal exit
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 ```
 This ensures Ctrl+C always shows a clean "Aborted." instead of a raw traceback.
+SystemExit propagates naturally (it inherits from BaseException, not Exception).
 The entry point is registered in `pyproject.toml` as `expflow_pde.cli:main`.
 
 **Rule 5: MCP entry point also handles BrokenPipeError (parent disconnect).**
