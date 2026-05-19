@@ -42,7 +42,7 @@ working on this project. It describes the project structure, key patterns, pitfa
 │   ├── cli_run.py       # run command group (4 sub-commands)
 │   ├── cli_audit.py     # audit command group (3 sub-commands)
 │   └── cli_system.py    # system command group (2 sub-commands)
-├── tests/               # pytest tests (98 tests)
+├── tests/               # pytest tests (329 tests, 18 files)
 ├── docs/                # Design documentation
 │   └── data_layer_design.md   # clearml-data data layer architecture
 ├── config.yaml          # Optional project config
