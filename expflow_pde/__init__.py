@@ -8,7 +8,7 @@ SDK-specific features (clearml, optuna, langfuse) are loaded on demand.
 
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # ── Lazy import helpers ──
 # clearml/optuna/langfuse SDKs are optional dependencies.
