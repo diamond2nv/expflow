@@ -67,7 +67,7 @@ dev = [
 ]
 
 [project.scripts]
-expflow = "expflow_pde.cli:app"
+expflow = "expflow_pde.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["expflow_pde*"]

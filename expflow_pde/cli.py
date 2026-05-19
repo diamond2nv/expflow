@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import platform
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -313,9 +314,9 @@ def info() -> None:
 @app.command()
 def mcp() -> None:
     """Start MCP Server for Hermes Agent integration."""
-    from expflow_pde.mcp import start_mcp
+    from expflow_pde.mcp import main as mcp_main
 
-    start_mcp()
+    mcp_main()
 
 
 @app.command()
@@ -342,3 +343,25 @@ def config() -> None:
                 print(f"  {sk}: {sv}")
         else:
             print(f"{k}: {v}")
+
+
+def main() -> None:
+    """Global CLI entry point with graceful shutdown on Ctrl+C / unexpected errors.
+
+    Catches KeyboardInterrupt (Ctrl+C) so the user always sees
+    a clean "Aborted." message instead of a raw traceback.
+    Also catches SystemExit from Typer (normal exit) and
+    unhandled Exception from plugins/callbacks so the script
+    never dumps a raw traceback to a CLI user.
+    """
+    try:
+        app()
+    except KeyboardInterrupt:
+        print()
+        print("Aborted.")
+        sys.exit(130)
+    except SystemExit:
+        raise  # Re-raise Typer's normal exit
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)

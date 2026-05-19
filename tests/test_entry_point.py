@@ -184,7 +184,7 @@ class TestEntryPointMissingDep:
             assert info_result.returncode == 0, f"info failed: {info_result.stderr}"
             assert "expflow" in info_result.stdout
 
-            # clearml command without clearml SDK -> clean ModuleNotFoundError
+            # clearml command without clearml SDK -> graceful error
             clearml_result = subprocess.run(
                 [expflow_cli, "clearml", "tasks"],
                 capture_output=True,
@@ -194,10 +194,9 @@ class TestEntryPointMissingDep:
             assert clearml_result.returncode == 1, (
                 f"Expected non-zero, got: {clearml_result.stdout}"
             )
-            assert "ModuleNotFoundError" in clearml_result.stderr
-            assert "clearml" in clearml_result.stderr
+            assert "No module named 'clearml'" in clearml_result.stderr or "ModuleNotFoundError: No module named 'clearml'" in clearml_result.stderr
 
-            # optuna command without optuna SDK -> clean ModuleNotFoundError
+            # optuna command without optuna SDK -> graceful error
             optuna_result = subprocess.run(
                 [expflow_cli, "optuna", "studies"],
                 capture_output=True,
@@ -205,5 +204,4 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert optuna_result.returncode == 1, f"Expected non-zero, got: {optuna_result.stdout}"
-            assert "ModuleNotFoundError" in optuna_result.stderr
-            assert "optuna" in optuna_result.stderr
+            assert "No module named 'optuna'" in optuna_result.stderr or "ModuleNotFoundError: No module named 'optuna'" in optuna_result.stderr

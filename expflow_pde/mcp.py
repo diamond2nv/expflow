@@ -9,6 +9,8 @@ and clearml/optuna/langfuse.
 Uses FastMCP for stdio transport. Start with: expflow mcp
 """
 
+import sys
+
 
 def start_mcp() -> None:
     """Start the MCP Server for Hermes Agent integration.
@@ -16,13 +18,13 @@ def start_mcp() -> None:
     Registers tools for experiment CRUD, HPO study query, dataset upload/download/lineage,
     model list/upload, compliance audit, and report generation.
     """
-    print("expflow MCP server starting...")
+    print("expflow MCP server starting...", flush=True)
     _check_backend("clearml")
     _check_backend("optuna")
     _check_backend("langfuse")
     _try_serve()
     print()
-    print("MCP server ready on stdio.")
+    print("MCP server ready on stdio.", flush=True)
 
 
 def _try_serve() -> None:
@@ -60,12 +62,32 @@ def _list_tools_stub() -> None:
     print("  - exp_compare_scores       Rank experiments by metric with gating")
     print("  - exp_list_workers          List clearml workers")
     print()
+    print("  [--] fastmcp not installed. Run: pip install fastmcp")
+    print()
 
 
 def _check_backend(name: str) -> None:
     """Check if a backend is available."""
     try:
         __import__(name)
-        print(f"  [OK] {name}")
+        print(f"  [OK] {name}", flush=True)
     except ImportError:
-        print(f"  [--] {name} (not installed)")
+        print(f"  [--] {name} (not installed)", flush=True)
+
+
+def main() -> None:
+    """MCP server entry point with graceful shutdown on Ctrl+C.
+
+    FastMCP's run(transport='stdio') blocks on stdin/stdout. When the
+    parent process (Hermes Agent) disconnects or the user presses Ctrl+C,
+    this handler ensures a clean exit without traceback pollution.
+    """
+    try:
+        start_mcp()
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        print("MCP server stopped.", file=sys.stderr)
+        sys.exit(130)
+    except BrokenPipeError:
+        # Parent process closed stdin/stdout — normal shutdown
+        sys.exit(0)
