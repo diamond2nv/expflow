@@ -342,8 +342,79 @@ Task.init(auto_connect_frameworks={
 2. **All output is JSON-serializable** — every `expflow/*.py` function returns
    plain dicts/lists. CLI handlers format them for terminal output.
 
-3. **Mockable by design** — 98 unit tests use `sys.modules` patch to mock SDKs,
+3. **Mockable by design** — 329 unit tests use `sys.modules` patch to mock SDKs,
    zero external dependencies. All new modules should follow this pattern.
+
+### Exception Handling Style: Graceful Degradation
+
+All Python code MUST follow "never crash, always degrade" (永不休机，优雅降级):
+
+**Rule 1: Every SDK call gets a try/except guard.**
+```python
+# ✅ Correct — return empty on failure
+try:
+    workers = Worker.get_workers(...)
+except Exception:
+    return []
+
+# ✅ Correct — fallback on failure
+try:
+    study = optuna.load_study(...)
+except Exception:
+    study = optuna.create_study(...)
+```
+
+**Rule 2: Non-critical operations are silent on failure.**
+```python
+task.set_metadata("expflow:thing", value)
+except Exception:
+    pass  # Non-critical — metadata write shouldn't fail the sync
+```
+
+**Rule 3: Critical errors return a dict with "error" key.**
+```python
+except Exception as e:
+    return {"error": str(e)}
+```
+
+**Rule 4: CLI entry point wraps everything in KeyboardInterrupt + Exception.**
+The top-level `cli.py:main()` is the single global catch-all:
+```python
+def main() -> None:
+    try:
+        app()  # Typer CLI
+    except KeyboardInterrupt:
+        print("Aborted.")
+        sys.exit(130)
+    except SystemExit:
+        raise   # Re-raise Typer's normal exit
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+```
+This ensures Ctrl+C always shows a clean "Aborted." instead of a raw traceback.
+The entry point is registered in `pyproject.toml` as `expflow_pde.cli:main`.
+
+**Rule 5: MCP entry point also handles BrokenPipeError (parent disconnect).**
+```python
+def main() -> None:
+    try:
+        start_mcp()
+    except KeyboardInterrupt:
+        print("MCP server stopped.", file=sys.stderr)
+        sys.exit(130)
+    except BrokenPipeError:
+        sys.exit(0)  # Parent closed stdin/stdout — normal shutdown
+```
+
+**Rule 6: Never use bare `except:`. Always specify `except Exception:` or narrower.**
+- `except Exception:` catches all recoverable errors
+- `except (ValueError, TypeError):` for data conversion
+- `except KeyboardInterrupt:` is caught **only at the top-level entry point**
+
+**Rule 7: Leave CLI-user-facing messages in English (project-wide PEP8 rule).**
+Error messages like `"Error: No module named 'clearml'"` are the final face
+the user sees — make them clean, informative, and traceback-free.
 
 ### MCP Tools (via `expflow mcp`)
 
