@@ -65,6 +65,8 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
     "torch>=2.0",
+    "clearml>=1.17",
+    "optuna>=4.0",
 ]
 
 [project.scripts]
