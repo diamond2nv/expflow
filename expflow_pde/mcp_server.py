@@ -39,6 +39,7 @@ def serve() -> None:
 
 def _register_experiment_tools(mcp: "FastMCP") -> None:
     from expflow_pde.clearml import dequeue_task, enqueue_task, get_task, list_tasks
+    from expflow_pde.compare import compare_scores
 
     @mcp.tool()
     def exp_list_runs(project: str = "PDEBench", limit: int = 20) -> list[dict]:
@@ -59,6 +60,28 @@ def _register_experiment_tools(mcp: "FastMCP") -> None:
     def exp_dequeue_run(task_id: str) -> dict:
         """Dequeue a task."""
         return dequeue_task(task_id)
+
+    @mcp.tool()
+    def exp_compare_scores(
+        project: str = "PDEBench",
+        tags: list[str] | None = None,
+        sort_by: str = "seg_total",
+        ascending: bool = False,
+        gates: list[dict] | None = None,
+        max_results: int = 20,
+    ) -> list[dict]:
+        """Rank experiments by metric score with optional gating.
+
+        Each gate is a dict: {"metric": "pde_mean", "op": "lt", "value": 18.09}
+        """
+        return compare_scores(
+            project=project,
+            tags=tags,
+            sort_by=sort_by,
+            ascending=ascending,
+            gates=gates,
+            max_results=max_results,
+        )
 
 
 # ── HPO tools ──
@@ -296,3 +319,16 @@ def _register_system_tools(mcp: "FastMCP") -> None:
     def exp_config_status() -> dict:
         """Check measurement plane component health."""
         return check_health()
+
+    @mcp.tool()
+    def exp_list_workers(
+        project: str | None = None,
+        max_results: int = 50,
+    ) -> list[dict]:
+        """List registered clearml workers."""
+        from expflow_pde.clearml import list_workers
+
+        return list_workers(
+            project_name=project,
+            max_results=max_results,
+        )

@@ -7,10 +7,10 @@ working on this project. It describes the project structure, key patterns, pitfa
 
 ```
 ~/Gitlab/Agentic4Sci/expflow/
-├── expflow_pde/         # Main Python package (12 modules)
+├── expflow_pde/         # Main Python package (16 modules)
 │   ├── __init__.py      # Version, exports
 │   ├── config.py        # YAML + .env config loader
-│   ├── cli.py           # Typer CLI — 5 top-level commands + 7 command groups
+│   ├── cli.py           # Typer CLI — 5 top-level commands + 8 command groups
 │   ├── clearml.py       # ClearML task/queue/dataset CRUD (SDK lazy import)
 │   ├── optuna.py        # Optuna study/trial/plot (SDK lazy import)
 │   ├── langfuse.py      # Langfuse trace/session/metrics (SDK lazy import)
@@ -18,7 +18,25 @@ working on this project. It describes the project structure, key patterns, pitfa
 │   ├── audit.py         # Validation, compliance, report generation
 │   ├── system.py        # Component health checks + TensorBoard
 │   ├── mcp.py           # MCP Server for Hermes Agent
-│   ├── cli_clearml.py   # clearml command group (8 sub-commands)
+│   ├── mcp_server.py    # FastMCP tool registry (18+ tools)
+│   ├── pipeline.py      # ExperimentPipeline class (train→eval→submit)
+│   ├── fsm.py           # 7-state FSM for experiment lifecycle
+│   ├── pin.py           # PIN protection module
+│   ├── metrics.py       # Standard metric registry
+│   ├── compare.py       # Model comparison & score ranking
+│   ├── analyze.py       # PDE competition intelligence
+│   ├── equations.py     # PDE formula registry (11 equations)
+│   ├── worktree.py      # Git worktree for experiment isolation
+│   ├── cli_clearml.py   # clearml command group (14 sub-commands)
+│   ├── cli_optuna.py    # optuna command group (8 sub-commands)
+│   ├── cli_langfuse.py  # langfuse command group (6 sub-commands)
+│   ├── cli_run.py       # run command group (4 sub-commands)
+│   ├── cli_audit.py     # audit command group (3 sub-commands)
+│   ├── cli_system.py    # system command group (2 sub-commands)
+│   ├── cli_pin.py       # pin command group (4 sub-commands)
+│   ├── cli_analyze.py   # analyze command group (4 sub-commands)
+│   └── cli_pipeline.py  # pipeline command group (submit command)
+├── tests/               # pytest tests (292+ tests)
 │   ├── cli_optuna.py    # optuna command group (8 sub-commands)
 │   ├── cli_langfuse.py  # langfuse command group (6 sub-commands)
 │   ├── cli_run.py       # run command group (4 sub-commands)
@@ -39,7 +57,7 @@ working on this project. It describes the project structure, key patterns, pitfa
 ### Module Dependency Chain
 
 ```
-cli.py (Typer) — 7 command groups + 5 top-level commands
+|cli.py (Typer) — 8 command groups + 5 top-level commands
   ├── clearml.py        → Task/Queue/Dataset SDK wrappers
   ├── optuna.py          → Study/Trial/Plot SDK wrappers
   ├── langfuse.py        → Trace/Session/Metrics SDK wrappers
@@ -57,21 +75,27 @@ loaded only when the corresponding command group is invoked.
 ```
 expflow
 ├── version / info / mcp / init / config           ← top-level (no SDK deps)
-├── clearml     (8 sub-cmds)                       ← lazy import clearml SDK
-│   ├── tasks / task / enqueue / dequeue / queues / compare
-│   └── dataset-register / dataset-list
+├── clearml     (14 sub-cmds)                      ← lazy import clearml SDK
+│   ├── tasks / task / enqueue / dequeue / queues / compare / workers
+│   ├── dataset-register / dataset-list / dataset-upload / dataset-download
+│   ├── pipeline-create / pipeline-add-step / pipeline-start / pipeline-stop / pipeline-list
+│   └── scheduler-create / scheduler-start / scheduler-add-task / scheduler-list / scheduler-remove-task
 ├── optuna      (8 sub-cmds)                       ← lazy import optuna SDK
-│   ├── create-study / studies / study / delete-study / ask / tell / plot
-│   └── run
+│   ├── create-study / studies / study / delete-study / ask / tell / plot / run
 ├── langfuse    (6 sub-cmds)                       ← lazy import langfuse SDK
 │   ├── traces / trace / trace-cost / sessions / session / metrics
 ├── run         (4 sub-cmds)                       ← no SDK deps (in-memory)
 │   ├── submit / list / status / cancel
 ├── audit       (3 sub-cmds)                       ← no SDK deps
 │   ├── validate / check-dataset / report
-└── system      (2 sub-cmds)                       ← lazy import per check
-    ├── status (health checks)
-    └── board  (TensorBoard)
+├── system      (2 sub-cmds)                       ← lazy import per check
+│   ├── status (health checks) / board (TensorBoard)
+├── pin         (4 sub-cmds)                       ← no SDK deps
+│   ├── init / check / clear / status
+├── analyze     (4 sub-cmds)                       ← no SDK deps
+│   ├── task / equations / status / advise
+└── pipeline    (1 sub-cmd)                        ← lazy import clearml SDK
+    └── submit (train → eval pipeline)
 ```
 
 ### Config Loading

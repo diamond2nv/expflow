@@ -141,6 +141,63 @@ def dequeue_task(task_id: str) -> dict[str, Any]:
     }
 
 
+# ── Worker operations ──
+
+
+def list_workers(
+    project_name: str | None = None,
+    status: list[str] | None = None,
+    max_results: int = 50,
+) -> list[dict[str, Any]]:
+    """List registered clearml workers and their status.
+
+    Wraps clearml SDK: Workers.get_workers() via Task.get_workers() or similar.
+
+    Args:
+        project_name: Filter by project (optional).
+        status: Filter by worker status (optional).
+        max_results: Max results (default: 50).
+
+    Returns:
+        List of worker dicts with id, name, status, GPU info, etc.
+    """
+    _import_worker_module()
+    from clearml import Worker  # noqa: F811
+
+    try:
+        workers = Worker.get_workers(
+            project_name=project_name,
+            status=status,
+            max_results=max_results,
+        )
+    except Exception:
+        return []
+
+    result = []
+    for w in workers:
+        entry: dict[str, Any] = {
+            "id": getattr(w, "id", ""),
+            "name": getattr(w, "name", ""),
+            "status": getattr(w, "status", ""),
+            "queue": getattr(w, "queue", ""),
+            "last_activity": str(getattr(w, "last_activity", "")),
+            "ip": getattr(w, "ip", ""),
+            "num_gpus": getattr(w, "num_gpus", 0),
+            "gpus": getattr(w, "gpus", ""),
+            "os_version": getattr(w, "os_version", ""),
+            "python_version": getattr(w, "python_version", ""),
+            "available_gpus": getattr(w, "available_gpus", ""),
+        }
+        result.append(entry)
+
+    return result
+
+
+def _import_worker_module() -> None:
+    """Lazy import of clearml worker modules."""
+    import clearml  # noqa: F401
+
+
 # ── Queue operations ──
 
 

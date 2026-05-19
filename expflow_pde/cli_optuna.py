@@ -199,30 +199,82 @@ def plot_cmd(
 def hpo_run_cmd(
     script: str = typer.Argument(..., help="Training script path"),
     trials: int = typer.Option(50, "--trials", "-t", help="Number of trials"),
-    n_jobs: int = typer.Option(1, "--n-jobs", "-j", help="Parallel jobs"),
+    n_jobs: int = typer.Option(
+        1, "--n-jobs", "-j", help="Parallel jobs (local) or max concurrent (distributed)"
+    ),
     study_name: Optional[str] = typer.Option(
-        None,
-        "--study-name",
-        "-n",
-        help="Study name (default: auto)",
+        None, "--study-name", "-n", help="Study name (default: auto)"
+    ),
+    distributed: bool = typer.Option(
+        False, "--distributed", "-d", help="Distribute trials via clearml ask/tell"
+    ),
+    optimizer: bool = typer.Option(
+        False, "--optimizer", "-O", help="Use ClearML HyperParameterOptimizer (native integration)"
+    ),
+    queue: Optional[str] = typer.Option(
+        None, "--queue", "-q", help="Target queue (required for distributed/optimizer)"
+    ),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="ClearML project name"),
+    direction: str = typer.Option(
+        "maximize", "--direction", help="Optimization direction: maximize or minimize"
+    ),
+    metric: str = typer.Option(
+        "seg_total",
+        "--metric",
+        "-m",
+        help="Objective metric name from METRIC: lines or clearml scalars",
+    ),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help="Max runtime in minutes"),
+    pruner: str = typer.Option(
+        "hyperband", "--pruner", help="Optuna pruner: hyperband, median, percentile, none"
     ),
 ) -> None:
-    """Run hyperparameter optimization on a script. Wraps Optuna study + trials."""
+    """Run hyperparameter optimization on a script.
+
+    Three modes:
+    - **Local** (default): runs trials sequentially on this machine.
+    - **Distributed** (--distributed, --queue): ask/tell + clearml Task clones.
+    - **Optimizer** (--optimizer, --queue): ClearML HyperParameterOptimizer
+      (native Optuna integration, recommended for production).
+
+    The training script must output METRIC:<name>=<value> lines (local mode)
+    or report clearml scalars (distributed/optimizer mode).
+    """
     from expflow_pde.hpo import run_hpo
+
+    pruner_val = pruner if pruner.lower() != "none" else None
 
     result = run_hpo(
         script=script,
         n_trials=trials,
         n_jobs=n_jobs,
         study_name=study_name,
+        direction=direction,
+        objective_metric=metric,
+        timeout_minutes=timeout,
+        distributed=distributed,
+        queue=queue,
+        project=project,
+        pruner=pruner_val,
+        use_hpo_optimizer=optimizer,
     )
 
     if "error" in result:
         print(f"Error: {result['error']}")
         return
 
+    method = result.get("method", "local" if not distributed and not optimizer else "distributed")
     print(f"HPO started: study={result['study_name']}")
-    print(f"  Script:   {result['script']}")
+    print(f"  Method:   {method}")
+    print(f"  Script:   {result.get('script', script)}")
     print(f"  Trials:   {result['n_trials']}")
-    print(f"  Parallel: {result['n_jobs']}")
-    print(f"  Best:     {result.get('best_value', 'pending')}")
+    print(f"  Completed: {result['completed']}")
+    print(f"  Failed:    {result['failed']}")
+    print(f"  Parallel:  {n_jobs}")
+    if result.get("best_value") is not None:
+        print(f"  Best value: {result['best_value']:.4f}")
+        print(f"  Best params: {result['best_params']}")
+    print(f"  Direction: {result['direction']}")
+    print(f"  Duration:  {result['duration_sec']:.1f}s")
+    if result.get("timeout_minutes"):
+        print(f"  Timeout:   {result['timeout_minutes']}min")

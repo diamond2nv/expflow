@@ -120,7 +120,11 @@ class ExperimentFSM:
             events=[
                 (EVENT_DISPATCH, STATE_CREATED, STATE_DISPATCHED),
                 (EVENT_QUEUE, STATE_DISPATCHED, STATE_QUEUED),
-                (EVENT_CANCEL, [STATE_CREATED, STATE_DISPATCHED, STATE_QUEUED, STATE_RUNNING], STATE_CANCELLED),
+                (
+                    EVENT_CANCEL,
+                    [STATE_CREATED, STATE_DISPATCHED, STATE_QUEUED, STATE_RUNNING],
+                    STATE_CANCELLED,
+                ),
                 (EVENT_START, STATE_QUEUED, STATE_RUNNING),
                 (EVENT_COMPLETE, STATE_RUNNING, STATE_COMPLETED),
                 (EVENT_FAIL, [STATE_QUEUED, STATE_RUNNING], STATE_FAILED),

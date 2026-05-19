@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """expflow audit — experiment validation, compliance checking, report generation."""
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _COMPLIANCE_VALUES = frozenset(["allowed", "forbidden"])
 
@@ -82,6 +85,110 @@ def check_dataset_compliance(
         "dataset_name": dataset_name,
         "compliance": compliance,
         "compliant": compliance == "allowed",
+    }
+
+
+def validate_competition_rules(
+    task_metrics: dict[str, float],
+    task_params: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Validate PDEBench competition rules against experiment metrics and params.
+
+    Rules checked:
+      - ``seg_total``: primary score (reported, no threshold gating here)
+      - ``pde_mean``: PDE residual gate < 18.09 (from STANDARD_METRICS threshold)
+      - ``train_time_min``: training time limit < 60 minutes
+      - ``sub_step``: must be present and > 0 (enforces dt correction)
+
+    Args:
+        task_metrics: Flat dict of metric names to float values (e.g.
+            ``{"seg_total": 57.09, "pde_mean": 18.29, "train_time_min": 50.5}``).
+        task_params: Optional clearml task parameters dict for sub_step check.
+
+    Returns:
+        Dict with:
+            ``all_pass``: bool
+            ``checks``: list of per-rule check dicts (name, label, value, passed, detail)
+            ``metrics``: input metrics dict
+    """
+    from expflow_pde.metrics import get_registered_metrics, validate_metric_threshold
+
+    checks: list[dict[str, Any]] = []
+    registered = get_registered_metrics()
+
+    rule_defs: list[tuple[str, str]] = [
+        ("seg_total", "Primary score"),
+        ("pde_mean", "PDE residual (gate: <18.09)"),
+        ("train_time_min", "Training time (limit: <60min)"),
+    ]
+
+    for metric_name, label in rule_defs:
+        value = task_metrics.get(metric_name)
+        info = registered.get(metric_name, {})
+        threshold = info.get("threshold")
+        higher_is_better = info.get("higher_is_better", True)
+        passed = True
+        detail = ""
+
+        if value is None:
+            passed = False
+            detail = f"metric '{metric_name}' not found"
+            checks.append(
+                {
+                    "name": metric_name,
+                    "label": label,
+                    "value": None,
+                    "passed": passed,
+                    "detail": detail,
+                }
+            )
+            continue
+
+        if threshold is not None:
+            v_result = validate_metric_threshold(metric_name, float(value))
+            passed = v_result.get("passed", True)
+            op = "≥" if higher_is_better else "≤"
+            fv = f"{value}"
+            detail = f"{fv} (rule: {op} {threshold})"
+
+        checks.append(
+            {
+                "name": metric_name,
+                "label": label,
+                "value": value,
+                "passed": passed,
+                "detail": detail,
+            }
+        )
+
+    # sub_step check
+    sub_step_found = False
+    if task_params:
+        for key in task_params or {}:
+            if "sub_step" in key.lower() or "substep" in key.lower():
+                val = task_params[key]
+                try:
+                    sub_step_found = int(val) > 0
+                except (ValueError, TypeError):
+                    sub_step_found = val is not None
+                break
+
+    checks.append(
+        {
+            "name": "sub_step",
+            "label": "sub_step parameter",
+            "value": sub_step_found,
+            "passed": sub_step_found,
+            "detail": "present and > 0" if sub_step_found else "missing or zero",
+        }
+    )
+
+    all_pass = all(c["passed"] for c in checks)
+
+    return {
+        "all_pass": all_pass,
+        "checks": checks,
+        "metrics": task_metrics,
     }
 
 

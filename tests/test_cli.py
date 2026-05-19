@@ -221,6 +221,26 @@ class TestClearmlQueuesCmd:
         assert result.exit_code == 0
         assert "No queues found." in result.stdout
 
+    def test_queue_status(self, mock_clearml_cli):
+        mock_q = _make_mock_queue("q1", "default")
+        mock_q.entries = []
+        mock_clearml_cli.Queue.get_queue.return_value = mock_q
+
+        for mod in ["expflow.clearml", "expflow.cli_clearml"]:
+            if mod in sys.modules:
+                del sys.modules[mod]
+
+        result = runner.invoke(app, ["clearml", "queue-status", "default"])
+        assert result.exit_code == 0
+        assert "Queue: default" in result.stdout
+        assert "Pending:" in result.stdout
+
+    def test_queue_status_help(self, mock_clearml_cli):
+        result = runner.invoke(app, ["clearml", "queue-status", "--help"])
+        assert result.exit_code == 0
+        assert "queue-status" in result.stdout
+        assert "queue name" in result.stdout.lower()
+
 
 # ══════════════════════════════════════════════════════════════
 # clearml dataset-register / dataset-list

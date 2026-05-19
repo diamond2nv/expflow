@@ -108,6 +108,29 @@ def list_queues_cmd() -> None:
         print(f"{q['id']:<24} {q['name']:<20}")
 
 
+@clearml_app.command("queue-status")
+def queue_status_cmd(
+    queue_name: str = typer.Argument(..., help="Queue name to inspect"),
+) -> None:
+    """Show detailed queue status: depth, pending, running tasks."""
+    from expflow_pde.clearml import get_queue_status
+
+    result = get_queue_status(queue_name)
+    if "error" in result:
+        print(f"Error: {result['error']}")
+        return
+
+    print(f"Queue: {result['name']} (ID: {result['id']})")
+    entries = result.get("entries", [])
+    print(f"  Pending:    {len(entries)}")
+    # If entries are dicts with status info, show breakdown
+    running = sum(1 for e in entries if isinstance(e, dict) and e.get("status") == "running")
+    queued = len(entries) - running
+    if running > 0:
+        print(f"  Running:    {running}")
+        print(f"  Queued:     {queued}")
+
+
 @clearml_app.command("compare")
 def compare_cmd(
     task_id_a: str = typer.Argument(..., help="First task ID"),
@@ -131,6 +154,110 @@ def compare_cmd(
     print(
         f"{'Tags':<20} {', '.join(a.get('tags', []))[:27]:<30} {', '.join(b.get('tags', []))[:27]:<30}"
     )
+
+
+# ── Workers commands ──
+
+
+@clearml_app.command("workers")
+def workers_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name"),
+    max_results: int = typer.Option(50, "--max", "-m", help="Max results"),
+) -> None:
+    """List registered clearml workers."""
+    from expflow_pde.clearml import list_workers
+
+    workers = list_workers(
+        project_name=project,
+        max_results=max_results,
+    )
+
+    if not workers:
+        print("No workers found.")
+        return
+
+    print(f"{'NAME':<30} {'STATUS':<12} {'QUEUE':<16} {'GPUS':<12} {'IP':<16}")
+    print("-" * 86)
+    for w in workers:
+        gpu_info = f"{w.get('available_gpus', '') or w.get('num_gpus', 0)}"
+        print(
+            f"{w['name'][:29]:<30} "
+            f"{w['status'][:11]:<12} "
+            f"{w['queue'][:15]:<16} "
+            f"{gpu_info:<12} "
+            f"{w['ip'][:15]:<16}"
+        )
+
+
+@clearml_app.command("compare-scores")
+def compare_scores_cmd(
+    project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
+    tags: Optional[str] = typer.Option(None, "--tags", "-t", help="Comma-separated tags to filter"),
+    sort_by: str = typer.Option("seg_total", "--sort-by", help="Metric to sort by"),
+    ascending: bool = typer.Option(
+        False, "--ascending", help="Sort ascending (default: descending)"
+    ),
+    gate: Optional[list[str]] = typer.Option(
+        None, "--gate", help="Gate filter: metric:op:value, e.g. --gate pde_mean:lt:18.09"
+    ),
+    max_results: int = typer.Option(20, "--max", "-m", help="Max results"),
+) -> None:
+    """Rank experiments by metric score with optional gating.
+
+    Fetches clearml tasks by project and tags, reads their metrics,
+    applies gates (e.g. --gate pde_mean:lt:18.09 --gate train_time_min:lt:60),
+    and returns a sorted ranking table.
+
+    Example:
+        expflow clearml compare-scores \\
+            --project PDEBench --tags task1 \\
+            --sort-by pde_mean --ascending \\
+            --gate pde_mean:lt:18.09 --gate train_time_min:lt:60
+    """
+    from expflow_pde.compare import compare_scores
+
+    tag_list = tags.split(",") if tags else None
+    gates = None
+    if gate:
+        gates = []
+        for g in gate:
+            parts = g.split(":")
+            if len(parts) == 3:
+                gates.append({"metric": parts[0], "op": parts[1], "value": float(parts[2])})
+
+    results = compare_scores(
+        project=project,
+        tags=tag_list,
+        sort_by=sort_by,
+        ascending=ascending,
+        gates=gates,
+        max_results=max_results,
+    )
+
+    if not results:
+        print("No matching experiments found.")
+        return
+
+    # Print header
+    print(f"Rank  {'ID':<12} {'Name':<28} {sort_by:<10} Gates")
+    print("-" * 70)
+    for rank, r in enumerate(results, 1):
+        metric_val = r.get("metrics", {}).get(sort_by, "-")
+        gates_str = "✓" if r.get("gates_passed", False) else "✗"
+        gate_detail = ""
+        if r.get("gate_results"):
+            failed = [g for g in r["gate_results"] if not g.get("passed", False)]
+            if failed:
+                gate_detail = " | " + ", ".join(
+                    f"{g['metric']}={g.get('value', '?')}" for g in failed
+                )
+        print(
+            f"  {rank:<3} "
+            f"{r['id'][:11]:<12} "
+            f"{r['name'][:27]:<28} "
+            f"{str(metric_val):<10} "
+            f"{gates_str}{gate_detail}"
+        )
 
 
 # ── Dataset commands ──

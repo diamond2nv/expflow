@@ -29,7 +29,9 @@ def _built_wheel_path() -> str | None:
     return os.path.join(dist_dir, candidates[-1]) if candidates else None
 
 
-ENTRY_SCRIPT = "#!/usr/bin/env python3\nimport sys\nfrom expflow_pde.cli import app\nsys.exit(app())\n"
+ENTRY_SCRIPT = (
+    "#!/usr/bin/env python3\nimport sys\nfrom expflow_pde.cli import app\nsys.exit(app())\n"
+)
 
 
 def _run_entry_point(args: list[str], **subprocess_kwargs) -> subprocess.CompletedProcess:

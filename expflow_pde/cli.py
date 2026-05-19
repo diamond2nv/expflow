@@ -129,6 +129,38 @@ def _lazy_register_pin() -> None:
     )
 
 
+def _lazy_register_analyze():
+    """Lazily import and register analyze sub-command group."""
+    from expflow_pde.cli_analyze import analyze_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "analyze":
+            return analyze_app
+
+    app.add_typer(
+        analyze_app,
+        name="analyze",
+        help="PDE competition task intelligence, equation analysis, and strategic advising",
+    )
+    return analyze_app
+
+
+def _lazy_register_pipeline():
+    """Lazily import and register pipeline sub-command group."""
+    from expflow_pde.cli_pipeline import pipeline_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "pipeline":
+            return pipeline_app
+
+    app.add_typer(
+        pipeline_app,
+        name="pipeline",
+        help="High-level PDEBench experiment pipeline (train -> eval -> submit)",
+    )
+    return pipeline_app
+
+
 # Call at module level to register sub-command groups
 # ── Backward-compat sub-command groups ──
 _ = _lazy_register_clearml()
@@ -138,7 +170,8 @@ _ = _lazy_register_run()
 _ = _lazy_register_audit()
 _ = _lazy_register_system()
 _ = _lazy_register_pin()
-
+_ = _lazy_register_analyze()
+_ = _lazy_register_pipeline()
 
 # ── Top-level commands ──
 

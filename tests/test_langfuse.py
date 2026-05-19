@@ -1,244 +1,293 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unit tests for expflow.langfuse — trace query, cost, sessions.
+"""Tests for expflow_pde.langfuse — Langfuse tracsintegration.
 
-All tests use mocked langfuse SDK. No real langfuse server needed.
+Tests patch thin wrapper `_clearml_get_task` and `_get_client` instead of
+the real clearml/langfuse modules, to avoid numpy re-import crashes.
 """
 
-import sys
+from __future__ import annotations
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ── Mock helpers ──
-
-
-def _make_mock_trace(
-    trace_id: str = "trace_1",
-    name: str = "inference",
-    user_id: str | None = "user1",
-    tags: list[str] | None = None,
-    session_id: str | None = None,
-    cost: float = 0.05,
-) -> MagicMock:
-    t = MagicMock(name=f"Trace({trace_id})")
-    t.id = trace_id
-    t.name = name
-    t.user_id = user_id
-    t.tags = tags or []
-    t.session_id = session_id
-    t.timestamp = "2026-05-14T00:00:00Z"
-    t.cost = cost
-    t.total_cost = cost
-    t.input = None
-    t.output = None
-    t.latency = 1.5
-    t.usage = {"input": 500, "output": 200}
-    return t
-
-
-def _make_mock_session(
-    session_id: str = "session_1",
-    user_id: str | None = "user1",
-) -> MagicMock:
-    s = MagicMock(name=f"Session({session_id})")
-    s.id = session_id
-    s.user_id = user_id
-    s.created_at = "2026-05-14T00:00:00Z"
-    return s
-
-
-# ── Fixture: mock langfuse.client ──
-
 
 @pytest.fixture(autouse=True)
-def mock_langfuse_client() -> MagicMock:
-    """Mock langfuse.Langfuse and .api namespace."""
-    # Mock the Langfuse client
-    client_cls = MagicMock(name="LangfuseClass")
-    client_instance = MagicMock(name="LangfuseInstance")
-    client_cls.return_value = client_instance
+def reset_config():
+    from expflow_pde import config
 
-    # Mock .api.trace / .api.session / .api.metrics
-    api = MagicMock(name="api")
-    client_instance.api = api
-    api.trace = MagicMock(name="trace_api")
-    api.session = MagicMock(name="session_api")
-    api.metrics = MagicMock(name="metrics_api")
-
-    pkg = MagicMock(name="langfuse_pkg")
-    pkg.Langfuse = client_cls
-
-    for mod in ["expflow.langfuse", "langfuse"]:
-        if mod in sys.modules:
-            del sys.modules[mod]
-
-    with patch.dict("sys.modules", {"langfuse": pkg}):
-        yield pkg
-
-    for mod in ["expflow.langfuse", "langfuse"]:
-        if mod in sys.modules:
-            del sys.modules[mod]
+    config._config_cache.clear()
 
 
-# ══════════════════════════════════════════════════════════════
-# list_traces
-# ══════════════════════════════════════════════════════════════
-
-
-class TestListTraces:
-    """list_traces() — list traces with optional filters."""
-
-    def test_list_traces_no_filter(self, mock_langfuse_client):
-        """list_traces returns serialized list."""
-        mock_langfuse_client.Langfuse.return_value.api.trace.list.return_value = [
-            _make_mock_trace("t1", "run_a", "user1", tags=["test"]),
-            _make_mock_trace("t2", "run_b", "user2", tags=[]),
-        ]
-
-        from expflow_pde.langfuse import list_traces
-
-        result = list_traces()
-
-        assert len(result) == 2
-        assert result[0]["id"] == "t1"
-        assert result[0]["name"] == "run_a"
-        assert result[0]["tags"] == ["test"]
-        assert result[1]["user_id"] == "user2"
-
-    def test_list_traces_empty(self, mock_langfuse_client):
-        """Empty traces returns empty list."""
-        mock_langfuse_client.Langfuse.return_value.api.trace.list.return_value = []
-
-        from expflow_pde.langfuse import list_traces
-
-        assert list_traces() == []
-
-    def test_list_traces_with_filters(self, mock_langfuse_client):
-        """Filters are passed through."""
-        mock_langfuse_client.Langfuse.return_value.api.trace.list.return_value = []
-
-        from expflow_pde.langfuse import list_traces
-
-        list_traces(limit=50, user_id="u1", tags=["prod"], session_id="s1")
-
-        mock_langfuse_client.Langfuse.return_value.api.trace.list.assert_called_with(
-            limit=50,
-            user_id="u1",
-            tags=["prod"],
-            session_id="s1",
-        )
-
-
-# ══════════════════════════════════════════════════════════════
-# get_trace
-# ══════════════════════════════════════════════════════════════
-
-
-class TestGetTrace:
-    """get_trace() — get single trace."""
-
-    def test_get_trace_returns_serialized(self, mock_langfuse_client):
-        mock_langfuse_client.Langfuse.return_value.api.trace.get.return_value = _make_mock_trace(
-            "t1", "infer", "u1", cost=0.12
-        )
-
-        from expflow_pde.langfuse import get_trace
-
-        result = get_trace("t1")
-
-        assert result["id"] == "t1"
-        assert result["name"] == "infer"
-        assert result["user_id"] == "u1"
-
-    def test_get_trace_passes_id(self, mock_langfuse_client):
-        from expflow_pde.langfuse import get_trace
-
-        get_trace("t1")
-        mock_langfuse_client.Langfuse.return_value.api.trace.get.assert_called_with("t1")
-
-
-# ══════════════════════════════════════════════════════════════
-# get_trace_cost
-# ══════════════════════════════════════════════════════════════
-
-
-class TestGetTraceCost:
-    """get_trace_cost() — aggregate cost for a trace."""
-
-    def test_get_trace_cost_returns_cost(self, mock_langfuse_client):
-        trace = _make_mock_trace("t1", cost=0.05)
-        mock_langfuse_client.Langfuse.return_value.api.trace.get.return_value = trace
-
-        from expflow_pde.langfuse import get_trace_cost
-
-        result = get_trace_cost("t1")
-
-        assert result["trace_id"] == "t1"
-        assert result["total_cost"] == 0.05
-        assert "usage" in result
-
-
-# ══════════════════════════════════════════════════════════════
-# Sessions
-# ══════════════════════════════════════════════════════════════
-
-
-class TestSessions:
-    """list_sessions() and get_session()."""
-
-    def test_list_sessions(self, mock_langfuse_client):
-        mock_langfuse_client.Langfuse.return_value.api.session.list.return_value = [
-            _make_mock_session("s1", "u1"),
-            _make_mock_session("s2", "u2"),
-        ]
-
-        from expflow_pde.langfuse import list_sessions
-
-        result = list_sessions()
-
-        assert len(result) == 2
-        assert result[0]["id"] == "s1"
-        assert result[1]["user_id"] == "u2"
-
-    def test_list_sessions_empty(self, mock_langfuse_client):
-        mock_langfuse_client.Langfuse.return_value.api.session.list.return_value = []
-
-        from expflow_pde.langfuse import list_sessions
-
-        assert list_sessions() == []
-
-    def test_get_session(self, mock_langfuse_client):
-        mock_langfuse_client.Langfuse.return_value.api.session.get.return_value = (
-            _make_mock_session("s1", "u1")
-        )
-
-        from expflow_pde.langfuse import get_session
-
-        result = get_session("s1")
-
-        assert result["id"] == "s1"
-        assert result["user_id"] == "u1"
-
-
-# ══════════════════════════════════════════════════════════════
-# Metrics
-# ══════════════════════════════════════════════════════════════
-
-
-class TestMetrics:
-    """get_metrics() — aggregated usage/cost metrics."""
-
-    def test_get_metrics_returns_dict(self, mock_langfuse_client):
-        mock_langfuse_client.Langfuse.return_value.api.metrics.get.return_value = {
-            "total_cost": 12.50,
-            "total_traces": 100,
-            "total_observations": 500,
+@pytest.fixture
+def mock_clearml_task():
+    task = MagicMock()
+    task.id = "abc123def456"
+    task.name = "test_experiment"
+    task.project = "PDEBench"
+    task.status = "completed"
+    task.get_tags = MagicMock(return_value=["task1", "sub_step5"])
+    task.get_parameters = MagicMock(
+        return_value={
+            "Args/--lr": "0.001",
+            "Args/--epochs": "80",
+            "Args/--batch_size": "64",
+            "_hidden": "should_be_skipped",
         }
+    )
+    task.get_last_scalar_metrics = MagicMock(
+        return_value={
+            "Score": {
+                "seg_total": {"last": 57.09},
+                "seg1": {"last": 33.64},
+            },
+            "PDE": {
+                "pde_mean": {"last": 18.29},
+            },
+        }
+    )
+    return task
 
-        from expflow_pde.langfuse import get_metrics
 
-        result = get_metrics()
+@pytest.fixture
+def mock_langfuse_client():
+    client = MagicMock()
+    trace_obj = MagicMock()
+    trace_obj.id = "lf_trace_xyz789"
+    client.trace = MagicMock(return_value=trace_obj)
+    return client
 
-        assert result["total_cost"] == 12.50
-        assert result["total_traces"] == 100
+
+# ── Tests: trace_experiment ──
+
+
+class TestTraceExperiment:
+    """Tests for trace_experiment function.
+
+    Patches _clearml_get_task (a thin wrapper that lazy-imports clearml)
+    and _get_client (lazy-imports langfuse) to avoid actual imports.
+    """
+
+    def test_trace_experiment_syncs_task(self, mock_clearml_task, mock_langfuse_client):
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            result = trace_experiment(task_id="abc123def456")
+
+            assert result["langfuse_trace_id"] == "lf_trace_xyz789"
+            assert result["task_id"] == "abc123def456"
+            assert result["task_name"] == "test_experiment"
+            assert result["project"] == "PDEBench"
+            assert result["status"] == "completed"
+            assert result["metrics_count"] == 3
+            assert result["params_count"] == 3
+
+            mock_langfuse_client.trace.assert_called_once()
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["name"] == "clearml:abc123def456"
+            assert ck["input"]["project"] == "PDEBench"
+            assert ck["input"]["tags"] == ["task1", "sub_step5"]
+            assert ck["output"]["metrics"]["Score/seg_total"] == 57.09
+            assert ck["output"]["status"] == "completed"
+            assert ck["metadata"]["source"] == "expflow"
+
+    def test_trace_experiment_custom_name(self, mock_clearml_task, mock_langfuse_client):
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            trace_experiment(task_id="abc123def456", trace_name="my_trace")
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["name"] == "my_trace"
+
+    def test_trace_experiment_session_id(self, mock_clearml_task, mock_langfuse_client):
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            trace_experiment(task_id="abc123def456", session_id="pdebench:hpo_v2")
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["session_id"] == "pdebench:hpo_v2"
+
+    def test_trace_experiment_parent_trace(self, mock_clearml_task, mock_langfuse_client):
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            result = trace_experiment(
+                task_id="abc123def456",
+                parent_trace_id="lf_hermes_decision_xyz",
+            )
+            assert result["parent_trace_id"] == "lf_hermes_decision_xyz"
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["metadata"]["parent_trace_id"] == "lf_hermes_decision_xyz"
+
+    def test_trace_experiment_task_not_found(self):
+        with patch("expflow_pde.langfuse._clearml_get_task", side_effect=Exception("Not found")):
+            from expflow_pde.langfuse import trace_experiment
+
+            with pytest.raises(ValueError, match="clearml Task not found"):
+                trace_experiment(task_id="nonexistent")
+
+    def test_trace_experiment_empty_metrics(self, mock_langfuse_client):
+        empty_task = MagicMock()
+        empty_task.id = "empty123"
+        empty_task.name = "empty_task"
+        empty_task.project = "PDEBench"
+        empty_task.status = "failed"
+        empty_task.get_tags = MagicMock(return_value=[])
+        empty_task.get_parameters = MagicMock(return_value={})
+        empty_task.get_last_scalar_metrics = MagicMock(return_value={})
+
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=empty_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            result = trace_experiment(task_id="empty123")
+            assert result["status"] == "failed"
+            assert result["metrics_count"] == 0
+            assert result["params_count"] == 0
+
+
+class TestTraceExperimentCLI:
+    def test_help(self):
+        import sys as _sys
+
+        for _m in list(_sys.modules.keys()):
+            if _m.startswith("expflow_pde") or _m == "typer":
+                del _sys.modules[_m]
+
+        from typer.testing import CliRunner
+
+        from expflow_pde.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["langfuse", "trace-experiment", "--help"])
+        assert result.exit_code == 0
+        assert "Sync a clearml experiment" in result.stdout
+        assert "--parent-trace" in result.stdout
+        assert "--parent-task-id" in result.stdout
+
+
+# ── Tests: _resolve_session_id (three-tier fallback) ──
+
+
+class TestResolveSessionID:
+    """Three-tier fallback for session_id resolution."""
+
+    def test_explicit_wins(self, mock_langfuse_client, mock_clearml_task):
+        """Tier 1: explicit session_id overrides everything."""
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            trace_experiment(
+                task_id="abc123def456",
+                session_id="my_session",
+                parent_task_id="parent_task_id",
+            )
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["session_id"] == "my_session"
+
+    def test_inherit_from_parent(self, mock_langfuse_client):
+        """Tier 2: inherit expflow:langfuse_session_id from parent clearml Task."""
+        parent_task = MagicMock()
+        parent_task.get_metadata = MagicMock(
+            return_value={"expflow:langfuse_session_id": "inherited_session_abc"}
+        )
+
+        from expflow_pde.langfuse import _resolve_session_id
+
+        with patch("expflow_pde.langfuse._clearml_get_task", return_value=parent_task):
+            sid = _resolve_session_id(session_id=None, parent_task_id="parent123")
+            assert sid == "inherited_session_abc"
+
+    def test_auto_generate_snowflake(self, mock_langfuse_client):
+        """Tier 3: auto-generate snowflake ID when nothing else is available."""
+        from expflow_pde.langfuse import _resolve_session_id
+
+        with patch(
+            "expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_9876543210"
+        ):
+            sid = _resolve_session_id(session_id=None, parent_task_id=None)
+            assert sid == "exp:snow_9876543210"
+            assert sid.startswith("exp:snow_")
+
+    def test_empty_explicit_falls_through(self, mock_langfuse_client):
+        """Empty string or whitespace-only explicit session falls through to auto."""
+        from expflow_pde.langfuse import _resolve_session_id
+
+        with patch("expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_1111"):
+            sid = _resolve_session_id(session_id="", parent_task_id=None)
+            assert sid == "exp:snow_1111"
+
+            sid = _resolve_session_id(session_id="   ", parent_task_id=None)
+            assert sid == "exp:snow_1111"
+
+    def test_parent_metadata_missing_falls_through(self, mock_langfuse_client):
+        """Parent Task exists but has no expflow:langfuse_session_id -> Tier 3."""
+        parent_task = MagicMock()
+        parent_task.get_metadata = MagicMock(return_value={})
+
+        from expflow_pde.langfuse import _resolve_session_id
+
+        with (
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=parent_task),
+            patch("expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_2222"),
+        ):
+            sid = _resolve_session_id(session_id=None, parent_task_id="parent123")
+            assert sid == "exp:snow_2222"
+
+    def test_parent_not_found_falls_through(self, mock_langfuse_client):
+        """Parent Task load fails -> Tier 3."""
+        from expflow_pde.langfuse import _resolve_session_id
+
+        with (
+            patch("expflow_pde.langfuse._clearml_get_task", side_effect=Exception("boom")),
+            patch("expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_3333"),
+        ):
+            sid = _resolve_session_id(session_id=None, parent_task_id="parent123")
+            assert sid == "exp:snow_3333"
+
+    def test_trace_experiment_auto_session(self, mock_clearml_task, mock_langfuse_client):
+        """Integration: trace_experiment without session_id produces non-empty snowflake session."""
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+            patch("expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_5555"),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            result = trace_experiment(task_id="abc123def456")
+            assert result["session_id"] == "exp:snow_5555"
+            assert result["session_id"] != ""
+            ck = mock_langfuse_client.trace.call_args[1]
+            assert ck["session_id"] == "exp:snow_5555"
+
+    def test_metadata_writes_session_id(self, mock_clearml_task, mock_langfuse_client):
+        """Metadata is always written back to clearml Task."""
+        with (
+            patch("expflow_pde.langfuse._get_client", return_value=mock_langfuse_client),
+            patch("expflow_pde.langfuse._clearml_get_task", return_value=mock_clearml_task),
+            patch("expflow_pde.snowflake.snowflake_session_id", return_value="exp:snow_6666"),
+        ):
+            from expflow_pde.langfuse import trace_experiment
+
+            trace_experiment(task_id="abc123def456")
+            mock_clearml_task.set_metadata.assert_any_call(
+                "expflow:langfuse_session_id", "exp:snow_6666"
+            )

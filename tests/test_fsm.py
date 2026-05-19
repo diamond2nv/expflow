@@ -15,15 +15,15 @@ import pytest
 from fysom import FysomError
 
 from expflow_pde.fsm import (
-    ExperimentFSM,
+    STATE_CANCELLED,
+    STATE_COMPLETED,
     STATE_CREATED,
     STATE_DISPATCHED,
+    STATE_FAILED,
     STATE_QUEUED,
     STATE_RUNNING,
-    STATE_COMPLETED,
-    STATE_FAILED,
-    STATE_CANCELLED,
     TERMINAL_STATES,
+    ExperimentFSM,
     state_label,
 )
 

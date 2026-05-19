@@ -58,9 +58,6 @@ def mock_clearml_pkg() -> MagicMock:
     ):
         yield pkg
 
-    if "expflow.clearml" in sys.modules:
-        del sys.modules["expflow.clearml"]
-
 
 # ══════════════════════════════════════════════════════════════
 # list_tasks

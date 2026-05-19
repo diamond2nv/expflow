@@ -18,6 +18,7 @@ from expflow_pde.clearml import (
     list_datasets,
     list_queues,
     list_tasks,
+    list_workers,
     model_list,
     model_upload,
     pipeline_add_step,
@@ -31,10 +32,13 @@ from expflow_pde.clearml import (
     scheduler_remove_task,
     scheduler_start,
 )
+from expflow_pde.pipeline import ExperimentPipeline
 
 __all__ = [
     "__version__",
+    "ExperimentPipeline",
     "list_tasks",
+    "list_workers",
     "get_task",
     "enqueue_task",
     "dequeue_task",

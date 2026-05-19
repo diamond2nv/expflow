@@ -16,6 +16,28 @@ def _get_client():
     return Langfuse()
 
 
+def _get_clearml_task():
+    """Lazy import of clearml Task class.
+
+    Returns the clearml Task class for clearml-object operations.
+    The import is deferred to call time so that callers can mock it
+    without triggering numpy re-import (a known issue in test isolation).
+    """
+    from clearml import Task  # noqa: F401
+
+    return Task
+
+
+def _clearml_get_task(task_id: str) -> Any:
+    """Load a clearml Task by ID via lazy import.
+
+    Wrapped as a separate function so tests can patch just this one call
+    instead of the entire clearml module (avoiding numpy re-import crash).
+    """
+    clearml_task = _get_clearml_task()
+    return clearml_task.get_task(task_id=task_id)
+
+
 # ── Trace operations ──
 
 
@@ -131,6 +153,190 @@ def get_metrics(**filters: Any) -> dict[str, Any]:
     client = _get_client()
     result = client.api.metrics.get(query=filters)
     return dict(result) if isinstance(result, dict) else {"data": result}
+
+
+# ── Session ID resolution ──
+
+
+def _resolve_session_id(
+    session_id: str | None = None,
+    parent_task_id: str | None = None,
+) -> str:
+    """Resolve a Langfuse session_id using a three-tier fallback strategy.
+
+    Tier 1 — explicit: caller provided a session_id string.
+    Tier 2 — inheritance: parent clearml Task has ``expflow:langfuse_session_id``
+             in its metadata (to keep child experiments under the same session).
+    Tier 3 — auto-generate: expflow produces a snowflake ID prefixed ``exp:snow_``.
+
+    Args:
+        session_id: Optional caller-provided session_id (Tier 1).
+        parent_task_id: Optional clearml parent Task ID to check for inherited
+            session_id (Tier 2).
+
+    Returns:
+        A non-empty session_id string.
+    """
+    # Tier 1: explicit
+    if session_id and session_id.strip():
+        return session_id.strip()
+
+    # Tier 2: inherit from parent clearml Task metadata
+    if parent_task_id:
+        try:
+            task = _clearml_get_task(parent_task_id)
+            meta = task.get_metadata() or {}
+            inherited = meta.get("expflow:langfuse_session_id", "")
+            if inherited and isinstance(inherited, str) and inherited.strip():
+                return inherited.strip()
+        except Exception:
+            pass  # Non-critical — fall through to Tier 3
+
+    # Tier 3: auto-generate snowflake ID
+    from expflow_pde.snowflake import snowflake_session_id
+
+    return snowflake_session_id()
+
+
+# ── clearml → Langfuse trace sync ──
+
+
+def trace_experiment(
+    task_id: str,
+    trace_name: str | None = None,
+    session_id: str | None = None,
+    user_id: str = "expflow",
+    parent_trace_id: str | None = None,
+    parent_task_id: str | None = None,
+) -> dict[str, Any]:
+    """Sync a clearml Task's metrics and hyperparams to Langfuse as a trace.
+
+    Reads the clearml Task identified by task_id, extracts its final scalars
+    and hyperparameters, and writes them to Langfuse. This bridges the gap
+    between the execution plane (clearml) and the observability plane (Langfuse),
+    allowing you to see experiment results alongside Hermes Agent LLM traces.
+
+    Session ID resolution follows a three-tier fallback:
+      1. Explicit ``session_id`` parameter (highest priority).
+      2. Inherit ``expflow:langfuse_session_id`` from ``parent_task_id``'s clearml
+         metadata — keeps child experiments under the same Langfuse session.
+      3. Auto-generate a snowflake ID (``exp:snow_<id>``) — every experiment
+         always gets a session, even standalone runs.
+
+    If parent_trace_id is provided, the created trace links back to the
+    Hermes Agent trace that triggered this experiment (bidirectional linking).
+
+    Args:
+        task_id: clearml Task ID to sync.
+        trace_name: Name for the Langfuse trace (default: "clearml:<task_id>").
+        session_id: Optional Langfuse session ID (Tier 1 — overrides fallback).
+        user_id: Langfuse user ID (default: "expflow").
+        parent_trace_id: Optional parent Langfuse trace ID (from Hermes decision).
+        parent_task_id: Optional clearml parent Task ID to check for inherited
+            session_id (Tier 2).
+
+    Returns:
+        Dict with langfuse_trace_id, task_id, status.
+
+    Raises:
+        ValueError: If clearml Task not found or Langfuse write fails.
+    """
+    client = _get_client()
+
+    # 1. Load clearml task
+    try:
+        task = _clearml_get_task(task_id)
+    except Exception as e:
+        raise ValueError(f"clearml Task not found: {task_id}") from e
+
+    # 2. Extract metadata
+    task_name = getattr(task, "name", task_id)
+    project = getattr(task, "project", "")
+    tags = list(getattr(task, "get_tags", lambda: [])() or [])
+
+    # 3. Extract hyperparameters
+    try:
+        params = task.get_parameters()
+        if isinstance(params, dict):
+            params = {k: str(v) for k, v in params.items() if not k.startswith("_")}
+        else:
+            params = {}
+    except Exception:
+        params = {}
+
+    # 4. Extract final scalars
+    try:
+        scalars = task.get_last_scalar_metrics()
+        metrics_out: dict[str, float] = {}
+        for group, metrics in scalars.items():
+            for metric_name, metric_data in metrics.items():
+                if isinstance(metric_data, dict) and "last" in metric_data:
+                    try:
+                        metrics_out[f"{group}/{metric_name}"] = float(metric_data["last"])
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        metrics_out = {}
+
+    # 5. Build status summary
+    status = getattr(task, "status", "unknown")
+
+    # 6. Build metadata — include parent trace link
+    metadata: dict[str, Any] = {
+        "source": "expflow",
+        "task_id": task_id,
+        "project": project,
+        "task_name": task_name,
+    }
+    if parent_trace_id:
+        metadata["parent_trace_id"] = parent_trace_id
+
+    # 7. Resolve session_id (three-tier fallback) and write to Langfuse
+    resolved_session = _resolve_session_id(
+        session_id=session_id,
+        parent_task_id=parent_task_id,
+    )
+    trace_name_actual = trace_name or f"clearml:{task_id[:12]}"
+    trace = client.trace(
+        name=trace_name_actual,
+        input={
+            "task_id": task_id,
+            "task_name": task_name,
+            "project": project,
+            "tags": tags,
+            "hyperparams": params,
+        },
+        output={
+            "status": status,
+            "metrics": metrics_out,
+        },
+        session_id=resolved_session,
+        user_id=user_id,
+        metadata=metadata,
+    )
+
+    trace_id = getattr(trace, "id", str(trace))
+
+    # 8. Write Langfuse IDs back to clearml Task metadata (reverse link)
+    try:
+        task.set_metadata("expflow:langfuse_trace_id", trace_id)
+        task.set_metadata("expflow:langfuse_session_id", resolved_session)
+        if parent_trace_id:
+            task.set_metadata("expflow:langfuse_parent_trace_id", parent_trace_id)
+    except Exception:
+        pass  # Non-critical — metadata write failure shouldn't fail the sync
+
+    return {
+        "langfuse_trace_id": trace_id,
+        "task_id": task_id,
+        "task_name": task_name,
+        "project": project,
+        "status": status,
+        "metrics_count": len(metrics_out),
+        "params_count": len(params),
+        "session_id": resolved_session,
+        "parent_trace_id": parent_trace_id or "",
+    }
 
 
 # ── Serializers ──

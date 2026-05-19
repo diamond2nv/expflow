@@ -127,3 +127,76 @@ def metrics_cmd() -> None:
     m = get_metrics()
     for k, v in m.items():
         print(f"{k}: {v}")
+
+
+# ── clearml → Langfuse sync ──
+
+
+@langfuse_app.command("trace-experiment")
+def trace_experiment_cmd(
+    task_id: str = typer.Argument(..., help="clearml Task ID to sync to Langfuse"),
+    trace_name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Langfuse trace name (default: clearml:<task_id>)"
+    ),
+    session_id: Optional[str] = typer.Option(
+        None, "--session", "-s", help="Langfuse session ID (Tier 1 — overrides fallback)"
+    ),
+    user_id: str = typer.Option("expflow", "--user", "-u", help="Langfuse user ID"),
+    parent_trace: Optional[str] = typer.Option(
+        None, "--parent-trace", help="Parent Langfuse trace ID (from Hermes Agent decision)"
+    ),
+    parent_task: Optional[str] = typer.Option(
+        None, "--parent-task-id", help="clearml parent Task ID (Tier 2 — inherit its session_id)"
+    ),
+) -> None:
+    """Sync a clearml experiment to Langfuse as a trace.
+
+    Reads the clearml Task's final metrics and hyperparameters and writes
+    them to Langfuse, bridging the execution and observability planes.
+
+    Session ID resolution follows a three-tier fallback:
+      1. --session (explicit) — highest priority.
+      2. --parent-task-id — inherit expflow:langfuse_session_id from parent
+         clearml Task's metadata.
+      3. Auto-generate a snowflake ID (exp:snow_<id>) — every experiment
+         always gets a session, even standalone runs.
+
+    Use --parent-trace to link this experiment to a Hermes Agent decision trace.
+
+    Examples:
+
+        # Sync a specific experiment (auto-generates session_id)
+        expflow langfuse trace-experiment a1b2c3d4e5f6
+
+        # Group under a session, linking to Hermes decision
+        expflow langfuse trace-experiment a1b2c3d4e5f6 \\
+            --session pdebench:hpo_burgers_v2 \\
+            --parent-trace lf_abc123
+
+        # Inherit session from parent clearml Task
+        expflow langfuse trace-experiment child_task_id \\
+            --parent-task-id parent_task_id
+    """
+    from expflow_pde.langfuse import trace_experiment
+
+    result = trace_experiment(
+        task_id=task_id,
+        trace_name=trace_name,
+        session_id=session_id,
+        user_id=user_id,
+        parent_trace_id=parent_trace,
+        parent_task_id=parent_task,
+    )
+
+    print("Experiment synced to Langfuse:")
+    print(f"  Langfuse trace: {result['langfuse_trace_id']}")
+    print(f"  clearml task:   {result['task_id']}")
+    print(f"  Task name:      {result['task_name']}")
+    print(f"  Project:        {result['project']}")
+    print(f"  Status:         {result['status']}")
+    print(f"  Metrics:        {result['metrics_count']}")
+    print(f"  Hyperparams:    {result['params_count']}")
+    if result.get("session_id"):
+        print(f"  Session:        {result['session_id']}")
+    if result.get("parent_trace_id"):
+        print(f"  Parent trace:   {result['parent_trace_id']}")

@@ -13,7 +13,7 @@ import pytest
 def no_external_deps():
     """Clean sys.modules so audit module is fresh each test."""
     for mod in list(sys.modules.keys()):
-        if mod.startswith("expflow.audit") or mod.startswith("expflow.report"):
+        if mod.startswith("expflow_pde.audit") or mod.startswith("expflow_pde.report"):
             del sys.modules[mod]
     yield
 
@@ -182,3 +182,102 @@ class TestGenerateReport:
 
         result = generate_report("exp_123", {"lr": 0.001}, {"final_loss": 0.05})
         assert "config" in result["markdown"].lower()
+
+
+# ══════════════════════════════════════════════════════════════
+# validate_competition_rules
+# ══════════════════════════════════════════════════════════════
+
+
+class TestValidateCompetitionRules:
+    """validate_competition_rules() — PDEBench competition rule checking."""
+
+    def test_all_rules_pass(self):
+        """All metrics and sub_step present and within threshold."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 45.5},
+            task_params={"Args/--sub_step": "5"},
+        )
+        assert result["all_pass"] is True
+        assert len(result["checks"]) == 4
+
+    def test_pde_mean_exceeds_threshold(self):
+        """pde_mean > 18.09 gate fails."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 20.0, "train_time_min": 45.5},
+            task_params={"Args/--sub_step": "5"},
+        )
+        assert result["all_pass"] is False
+        pde_check = next(c for c in result["checks"] if c["name"] == "pde_mean")
+        assert pde_check["passed"] is False
+
+    def test_train_time_exceeds_limit(self):
+        """train_time_min > 60 fails."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 75.0},
+            task_params={"Args/--sub_step": "5"},
+        )
+        assert result["all_pass"] is False
+        time_check = next(c for c in result["checks"] if c["name"] == "train_time_min")
+        assert time_check["passed"] is False
+
+    def test_missing_metric_fails(self):
+        """Missing metric makes all_pass False."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09},
+            task_params={"Args/--sub_step": "5"},
+        )
+        assert result["all_pass"] is False
+        missing = next(c for c in result["checks"] if c["value"] is None)
+        assert missing["passed"] is False
+
+    def test_missing_sub_step_fails(self):
+        """No sub_step in params makes that check fail."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 45.5},
+            task_params=None,
+        )
+        assert result["all_pass"] is False
+        sub_check = next(c for c in result["checks"] if c["name"] == "sub_step")
+        assert sub_check["passed"] is False
+
+    def test_sub_step_zero_fails(self):
+        """sub_step=0 fails."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 45.5},
+            task_params={"Args/--sub_step": "0"},
+        )
+        assert result["all_pass"] is False
+        sub_check = next(c for c in result["checks"] if c["name"] == "sub_step")
+        assert sub_check["passed"] is False
+
+    def test_empty_params_falls_through(self):
+        """Empty params dict also fails sub_step check."""
+        from expflow_pde.audit import validate_competition_rules
+
+        result = validate_competition_rules(
+            task_metrics={"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 45.5},
+            task_params={},
+        )
+        sub_check = next(c for c in result["checks"] if c["name"] == "sub_step")
+        assert sub_check["passed"] is False
+
+    def test_result_includes_metrics(self):
+        """Result includes original metrics dict."""
+        from expflow_pde.audit import validate_competition_rules
+
+        metrics = {"seg_total": 57.09, "pde_mean": 15.0, "train_time_min": 45.5}
+        result = validate_competition_rules(task_metrics=metrics, task_params=None)
+        assert result["metrics"] == metrics

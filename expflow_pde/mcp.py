@@ -57,6 +57,9 @@ def _list_tools_stub() -> None:
     print("  - exp_generate_report      Generate experiment report")
     print("  - exp_board_url            Get TensorBoard URL")
     print("  - exp_config_status        Check component health")
+    print("  - exp_compare_scores       Rank experiments by metric with gating")
+    print("  - exp_list_workers          List clearml workers")
+    print()
 
 
 def _check_backend(name: str) -> None:
