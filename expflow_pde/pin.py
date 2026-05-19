@@ -36,7 +36,25 @@ _ENV_KEY = "EXPFLOW_PIN_HASH"
 
 # ── Module-level state for testability ──
 # Set this to a tmp_path in tests to avoid touching ~/.expflow/
+# Use _set_test_dir() (not direct assignment) for cross-file test safety.
 _PIN_DIR: str | None = None
+
+
+def _set_test_dir(path: str) -> None:
+    """Set a temporary directory for PIN storage during testing.
+
+    This is a module-level function so that all internal references to
+    _PIN_DIR see the update, even when the test file's own top-level
+    imports of _get_pin_dir / _pin_hash_path / _read_pin_hash were
+    bound at parse time under a different module identity.
+
+    Args:
+        path: Absolute path to the test directory (e.g. str(tmp_path)).
+
+    To restore, call ``_set_test_dir(None)`` or ``_set_test_dir("")``.
+    """
+    global _PIN_DIR  # noqa: PLW0603
+    _PIN_DIR = path if path else None
 
 
 def _get_pin_dir() -> str:

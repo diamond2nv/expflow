@@ -20,6 +20,7 @@ from expflow_pde.pin import (
     _hash_pin,
     _pin_hash_path,
     _read_pin_hash,
+    _set_test_dir,
     _validate_pin,
     clear_pin,
     guard,
@@ -93,10 +94,10 @@ class TestInitClear:
     """PIN init/clear lifecycle — uses real filesystem via tmp_path."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path, monkeypatch):
-        """Redirect PIN storage to tmp_path."""
-        monkeypatch.setattr("expflow_pde.pin._PIN_DIR", str(tmp_path))
+    def setup(self, tmp_path):
+        _set_test_dir(str(tmp_path))
         yield
+        _set_test_dir(None)
 
     def test_init_creates_hash_file(self):
         h = init_pin("4321")
@@ -135,9 +136,10 @@ class TestVerify:
     """PIN verification."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("expflow_pde.pin._PIN_DIR", str(tmp_path))
+    def setup(self, tmp_path):
+        _set_test_dir(str(tmp_path))
         yield
+        _set_test_dir(None)
 
     def test_verify_correct_pin(self):
         init_pin("1234")
@@ -169,9 +171,10 @@ class TestGuard:
     """Interactive guard — mocks getpass."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("expflow_pde.pin._PIN_DIR", str(tmp_path))
+    def setup(self, tmp_path):
+        _set_test_dir(str(tmp_path))
         yield
+        _set_test_dir(None)
 
     def test_guard_no_pin_returns_true(self):
         """If no PIN is configured, guard always allows."""
@@ -206,9 +209,10 @@ class TestPinIsSet:
     """pin_is_set() detection."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("expflow_pde.pin._PIN_DIR", str(tmp_path))
+    def setup(self, tmp_path):
+        _set_test_dir(str(tmp_path))
         yield
+        _set_test_dir(None)
 
     def test_not_set_by_default(self):
         assert pin_is_set() is False
@@ -227,9 +231,10 @@ class TestReadPinHash:
     """Read PIN hash from file."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("expflow_pde.pin._PIN_DIR", str(tmp_path))
+    def setup(self, tmp_path):
+        _set_test_dir(str(tmp_path))
         yield
+        _set_test_dir(None)
 
     def test_read_after_init(self):
         h = init_pin("1234")
