@@ -38,7 +38,7 @@ def serve() -> None:
 
 
 def _register_experiment_tools(mcp: "FastMCP") -> None:
-    from expflow.clearml import dequeue_task, enqueue_task, get_task, list_tasks
+    from expflow_pde.clearml import dequeue_task, enqueue_task, get_task, list_tasks
 
     @mcp.tool()
     def exp_list_runs(project: str = "PDEBench", limit: int = 20) -> list[dict]:
@@ -65,7 +65,7 @@ def _register_experiment_tools(mcp: "FastMCP") -> None:
 
 
 def _register_hpo_tools(mcp: "FastMCP") -> None:
-    from expflow.optuna import get_study, list_studies
+    from expflow_pde.optuna import get_study, list_studies
 
     @mcp.tool()
     def exp_list_studies() -> list[dict]:
@@ -82,7 +82,7 @@ def _register_hpo_tools(mcp: "FastMCP") -> None:
 
 
 def _register_dataset_tools(mcp: "FastMCP") -> None:
-    from expflow.clearml import (
+    from expflow_pde.clearml import (
         dataset_download,
         dataset_lineage,
         dataset_upload,
@@ -147,7 +147,7 @@ def _register_dataset_tools(mcp: "FastMCP") -> None:
 
 
 def _register_model_tools(mcp: "FastMCP") -> None:
-    from expflow.clearml import model_list, model_upload
+    from expflow_pde.clearml import model_list, model_upload
 
     @mcp.tool()
     def exp_model_list(
@@ -182,7 +182,7 @@ def _register_model_tools(mcp: "FastMCP") -> None:
 
 
 def _register_pipeline_tools(mcp: "FastMCP") -> None:
-    from expflow.clearml import (
+    from expflow_pde.clearml import (
         pipeline_add_step,
         pipeline_create,
         pipeline_list,
@@ -270,7 +270,7 @@ def _register_pipeline_tools(mcp: "FastMCP") -> None:
 
 
 def _register_audit_tools(mcp: "FastMCP") -> None:
-    from expflow.audit import generate_report
+    from expflow_pde.audit import generate_report
 
     @mcp.tool()
     def exp_generate_report(
@@ -290,7 +290,7 @@ def _register_audit_tools(mcp: "FastMCP") -> None:
 
 
 def _register_system_tools(mcp: "FastMCP") -> None:
-    from expflow.system import check_health
+    from expflow_pde.system import check_health
 
     @mcp.tool()
     def exp_config_status() -> dict:

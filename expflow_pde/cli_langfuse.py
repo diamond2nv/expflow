@@ -32,7 +32,7 @@ def list_traces_cmd(
     ),
 ) -> None:
     """List Langfuse traces."""
-    from expflow.langfuse import list_traces
+    from expflow_pde.langfuse import list_traces
 
     tag_list = tags.split(",") if tags else None
     traces = list_traces(limit=limit, user_id=user_id, tags=tag_list, session_id=session_id)
@@ -54,7 +54,7 @@ def get_trace_cmd(
     trace_id: str = typer.Argument(..., help="Trace ID"),
 ) -> None:
     """Show details for a trace."""
-    from expflow.langfuse import get_trace
+    from expflow_pde.langfuse import get_trace
 
     t = get_trace(trace_id)
     print(f"ID:        {t['id']}")
@@ -71,7 +71,7 @@ def trace_cost_cmd(
     trace_id: str = typer.Argument(..., help="Trace ID"),
 ) -> None:
     """Show cost breakdown for a trace."""
-    from expflow.langfuse import get_trace_cost
+    from expflow_pde.langfuse import get_trace_cost
 
     c = get_trace_cost(trace_id)
     print(f"Trace:     {c['trace_id']}")
@@ -88,7 +88,7 @@ def list_sessions_cmd(
     limit: int = typer.Option(100, "--limit", "-l", help="Max sessions"),
 ) -> None:
     """List Langfuse sessions."""
-    from expflow.langfuse import list_sessions
+    from expflow_pde.langfuse import list_sessions
 
     sessions = list_sessions(limit=limit)
 
@@ -108,7 +108,7 @@ def get_session_cmd(
     session_id: str = typer.Argument(..., help="Session ID"),
 ) -> None:
     """Show details for a session."""
-    from expflow.langfuse import get_session
+    from expflow_pde.langfuse import get_session
 
     s = get_session(session_id)
     print(f"ID:        {s['id']}")
@@ -122,7 +122,7 @@ def get_session_cmd(
 @langfuse_app.command("metrics")
 def metrics_cmd() -> None:
     """Show aggregated usage/cost metrics."""
-    from expflow.langfuse import get_metrics
+    from expflow_pde.langfuse import get_metrics
 
     m = get_metrics()
     for k, v in m.items():

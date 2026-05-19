@@ -20,7 +20,7 @@ def validate_cmd(
     experiment_id: str = typer.Argument(..., help="Experiment ID"),
 ) -> None:
     """Run validation checks on an experiment."""
-    from expflow.audit import validate_experiment
+    from expflow_pde.audit import validate_experiment
 
     result = validate_experiment(experiment_id, config_snapshot={}, metrics={})
     print(f"Validation for: {result['experiment_id']}")
@@ -42,7 +42,7 @@ def check_dataset_cmd(
     ),
 ) -> None:
     """Check dataset compliance."""
-    from expflow.audit import check_dataset_compliance
+    from expflow_pde.audit import check_dataset_compliance
 
     result = check_dataset_compliance(dataset_name, compliance)
     status = "COMPLIANT" if result["compliant"] else "NON-COMPLIANT"
@@ -56,8 +56,8 @@ def report_cmd(
     experiment_id: str = typer.Argument(..., help="Experiment ID"),
 ) -> None:
     """Generate an experiment report (Markdown)."""
-    from expflow.audit import generate_report
-    from expflow.dispatcher import get_experiment_status
+    from expflow_pde.audit import generate_report
+    from expflow_pde.dispatcher import get_experiment_status
 
     exp = get_experiment_status(experiment_id)
     if "error" in exp:

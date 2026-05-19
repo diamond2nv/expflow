@@ -79,7 +79,7 @@ class TestCreateStudy:
         mock_study = _make_mock_study(1, "hpo_burgers", "minimize")
         mock_optuna_pkg.create_study.return_value = mock_study
 
-        from expflow.optuna import create_study
+        from expflow_pde.optuna import create_study
 
         result = create_study("hpo_burgers")
 
@@ -91,7 +91,7 @@ class TestCreateStudy:
         """create_study forwards study_name to optuna."""
         mock_optuna_pkg.create_study.return_value = _make_mock_study(1, "test")
 
-        from expflow.optuna import create_study
+        from expflow_pde.optuna import create_study
 
         create_study("my_study", storage="sqlite:///optuna.db")
 
@@ -106,7 +106,7 @@ class TestCreateStudy:
         mock_study = _make_mock_study(1, "max_study", "maximize")
         mock_optuna_pkg.create_study.return_value = mock_study
 
-        from expflow.optuna import create_study
+        from expflow_pde.optuna import create_study
 
         result = create_study("max_study", direction="maximize")
 
@@ -142,7 +142,7 @@ class TestListStudies:
 
         mock_optuna_pkg.get_all_study_summaries.return_value = [mock_summary_1, mock_summary_2]
 
-        from expflow.optuna import list_studies
+        from expflow_pde.optuna import list_studies
 
         result = list_studies()
 
@@ -160,7 +160,7 @@ class TestListStudies:
         """No studies returns empty list."""
         mock_optuna_pkg.get_all_study_summaries.return_value = []
 
-        from expflow.optuna import list_studies
+        from expflow_pde.optuna import list_studies
 
         assert list_studies() == []
 
@@ -182,7 +182,7 @@ class TestGetStudy:
         ]
         mock_optuna_pkg.load_study.return_value = mock_study
 
-        from expflow.optuna import get_study
+        from expflow_pde.optuna import get_study
 
         result = get_study("my_study")
 
@@ -200,7 +200,7 @@ class TestGetStudy:
         """get_study forwards storage to optuna.load_study."""
         mock_optuna_pkg.load_study.return_value = _make_mock_study(1, "s")
 
-        from expflow.optuna import get_study
+        from expflow_pde.optuna import get_study
 
         get_study("my_study", storage="sqlite:///optuna.db")
 
@@ -220,7 +220,7 @@ class TestDeleteStudy:
 
     def test_delete_study_calls_optuna(self, mock_optuna_pkg):
         """delete_study forwards to optuna.delete_study."""
-        from expflow.optuna import delete_study
+        from expflow_pde.optuna import delete_study
 
         delete_study("my_study")
 
@@ -231,7 +231,7 @@ class TestDeleteStudy:
 
     def test_delete_study_returns_serialized(self, mock_optuna_pkg):
         """delete_study returns dict confirming deletion."""
-        from expflow.optuna import delete_study
+        from expflow_pde.optuna import delete_study
 
         result = delete_study("my_study")
 
@@ -256,7 +256,7 @@ class TestAskTrial:
         mock_study.ask.return_value = mock_trial
         mock_optuna_pkg.load_study.return_value = mock_study
 
-        from expflow.optuna import ask_trial
+        from expflow_pde.optuna import ask_trial
 
         result = ask_trial("my_study")
 
@@ -277,7 +277,7 @@ class TestTellTrial:
         mock_study = _make_mock_study(1, "my_study", "minimize")
         mock_optuna_pkg.load_study.return_value = mock_study
 
-        from expflow.optuna import tell_trial
+        from expflow_pde.optuna import tell_trial
 
         result = tell_trial("my_study", trial_number=3, value=0.05)
 
@@ -307,7 +307,7 @@ class TestPlotStudy:
         mock_fig = MagicMock()
         mock_optuna_pkg.visualization.plot_optimization_history.return_value = mock_fig
 
-        from expflow.optuna import plot_study
+        from expflow_pde.optuna import plot_study
 
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             output_path = f.name
@@ -328,7 +328,7 @@ class TestPlotStudy:
 
     def test_plot_study_unknown_type(self, mock_optuna_pkg):
         """Unknown plot type raises ValueError."""
-        from expflow.optuna import plot_study
+        from expflow_pde.optuna import plot_study
 
         with pytest.raises(ValueError, match="Unknown plot type"):
             plot_study("my_study", plot_type="unknown")
@@ -346,7 +346,7 @@ class TestOptunaErrors:
         """create_study propagates optuna errors."""
         mock_optuna_pkg.create_study.side_effect = ValueError("Study 'my_study' already exists.")
 
-        from expflow.optuna import create_study
+        from expflow_pde.optuna import create_study
 
         with pytest.raises(ValueError, match="already exists"):
             create_study("my_study")
@@ -355,7 +355,7 @@ class TestOptunaErrors:
         """get_study propagates KeyError for nonexistent study."""
         mock_optuna_pkg.load_study.side_effect = KeyError("my_study")
 
-        from expflow.optuna import get_study
+        from expflow_pde.optuna import get_study
 
         with pytest.raises(KeyError):
             get_study("nonexistent")

@@ -79,7 +79,7 @@ class TestListTasks:
         ]
         mock_clearml_pkg.Task.get_tasks.return_value = mock_tasks
 
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         result = list_tasks()
 
@@ -103,7 +103,7 @@ class TestListTasks:
             else []
         )
 
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         result = list_tasks(project_name="proj_y")
 
@@ -116,7 +116,7 @@ class TestListTasks:
             _make_mock_task("t1", "a", "p", "completed")
         ]
 
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         result = list_tasks()
 
@@ -128,7 +128,7 @@ class TestListTasks:
         """No tasks returns empty list."""
         mock_clearml_pkg.Task.get_tasks.return_value = []
 
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         result = list_tasks()
 
@@ -145,32 +145,32 @@ class TestListTasksArgs:
 
     def test_passes_project_name(self, mock_clearml_pkg):
         mock_clearml_pkg.Task.get_tasks.return_value = []
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         list_tasks(project_name="my_project")
         mock_clearml_pkg.Task.get_tasks.assert_called_with(project_name="my_project")
 
     def test_passes_task_name(self, mock_clearml_pkg):
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         list_tasks(task_name="my_task")
         mock_clearml_pkg.Task.get_tasks.assert_called_with(task_name="my_task")
 
     def test_passes_tags(self, mock_clearml_pkg):
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         list_tasks(tags=["important"])
         mock_clearml_pkg.Task.get_tasks.assert_called_with(tags=["important"])
 
     def test_passes_status(self, mock_clearml_pkg):
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         list_tasks(status=["completed"])
         mock_clearml_pkg.Task.get_tasks.assert_called_with(status=["completed"])
 
     def test_no_args_passes_no_kwargs(self, mock_clearml_pkg):
         mock_clearml_pkg.Task.get_tasks.return_value = []
-        from expflow.clearml import list_tasks
+        from expflow_pde.clearml import list_tasks
 
         list_tasks()
         mock_clearml_pkg.Task.get_tasks.assert_called_with()
@@ -188,7 +188,7 @@ class TestGetTask:
         mock_task = _make_mock_task("t1", "my_task", "proj", "completed")
         mock_clearml_pkg.Task.get_task.return_value = mock_task
 
-        from expflow.clearml import get_task
+        from expflow_pde.clearml import get_task
 
         result = get_task("t1")
 
@@ -198,7 +198,7 @@ class TestGetTask:
 
     def test_get_task_passes_id(self, mock_clearml_pkg):
         mock_clearml_pkg.Task.get_task.return_value = _make_mock_task("t1")
-        from expflow.clearml import get_task
+        from expflow_pde.clearml import get_task
 
         get_task("t1")
         mock_clearml_pkg.Task.get_task.assert_called_with(task_id="t1")
@@ -216,7 +216,7 @@ class TestQueueOperations:
         mock_task = _make_mock_task("t1", "a", "p", "queued")
         mock_clearml_pkg.Task.get_task.return_value = mock_task
 
-        from expflow.clearml import enqueue_task
+        from expflow_pde.clearml import enqueue_task
 
         result = enqueue_task("t1", queue_name="default")
 
@@ -228,7 +228,7 @@ class TestQueueOperations:
         mock_task = _make_mock_task("t1", "a", "p", "created")
         mock_clearml_pkg.Task.get_task.return_value = mock_task
 
-        from expflow.clearml import enqueue_task
+        from expflow_pde.clearml import enqueue_task
 
         enqueue_task("t1")
 
@@ -238,7 +238,7 @@ class TestQueueOperations:
         mock_task = _make_mock_task("t1", "a", "p", "created")
         mock_clearml_pkg.Task.get_task.return_value = mock_task
 
-        from expflow.clearml import dequeue_task
+        from expflow_pde.clearml import dequeue_task
 
         result = dequeue_task("t1")
 
@@ -259,7 +259,7 @@ class TestListQueues:
         mock_qs = [_make_mock_queue("q1", "default"), _make_mock_queue("q2", "gpu_queue")]
         mock_clearml_pkg.Queue.get_queues.return_value = mock_qs
 
-        from expflow.clearml import list_queues
+        from expflow_pde.clearml import list_queues
 
         result = list_queues()
 
@@ -272,7 +272,7 @@ class TestListQueues:
         mock_q.entries = []
         mock_clearml_pkg.Queue.get_queue.return_value = mock_q
 
-        from expflow.clearml import get_queue_status
+        from expflow_pde.clearml import get_queue_status
 
         result = get_queue_status("default")
 
@@ -282,7 +282,7 @@ class TestListQueues:
 
     def test_get_queue_status_passes_name(self, mock_clearml_pkg):
         mock_clearml_pkg.Queue.get_queue.return_value = _make_mock_queue("q1", "default")
-        from expflow.clearml import get_queue_status
+        from expflow_pde.clearml import get_queue_status
 
         get_queue_status("gpu_queue")
         mock_clearml_pkg.Queue.get_queue.assert_called_with(queue_name="gpu_queue")
@@ -301,7 +301,7 @@ class TestDatasetCompliance:
         mock_ds.id = "ds1"
         mock_clearml_pkg.Dataset.get.return_value = mock_ds
 
-        from expflow.clearml import annotate_compliance
+        from expflow_pde.clearml import annotate_compliance
 
         result = annotate_compliance(
             dataset_id="ds1",
@@ -313,7 +313,7 @@ class TestDatasetCompliance:
         assert result["compliance"] == "allowed"
 
     def test_annotate_compliance_rejects_invalid(self, mock_clearml_pkg):
-        from expflow.clearml import annotate_compliance
+        from expflow_pde.clearml import annotate_compliance
 
         with pytest.raises(ValueError, match="compliance"):
             annotate_compliance(
@@ -326,7 +326,7 @@ class TestDatasetCompliance:
         mock_ds_2 = _make_mock_ds("ds2", "forbidden_ds", "2.0", None)
         mock_clearml_pkg.Dataset.list_datasets.return_value = [mock_ds_1, mock_ds_2]
 
-        from expflow.clearml import list_datasets
+        from expflow_pde.clearml import list_datasets
 
         result = list_datasets()
 
@@ -341,7 +341,7 @@ class TestDatasetCompliance:
         ]
         mock_clearml_pkg.Dataset.list_datasets.return_value = mock_ds_list
 
-        from expflow.clearml import list_datasets
+        from expflow_pde.clearml import list_datasets
 
         result = list_datasets(compliance_filter="allowed")
 
@@ -355,7 +355,7 @@ class TestDatasetCompliance:
         ]
         mock_clearml_pkg.Dataset.list_datasets.return_value = mock_ds_list
 
-        from expflow.clearml import list_datasets
+        from expflow_pde.clearml import list_datasets
 
         result = list_datasets(name_filter="burgers")
 
@@ -365,7 +365,7 @@ class TestDatasetCompliance:
     def test_list_datasets_empty_result(self, mock_clearml_pkg):
         mock_clearml_pkg.Dataset.list_datasets.return_value = []
 
-        from expflow.clearml import list_datasets
+        from expflow_pde.clearml import list_datasets
 
         result = list_datasets()
 
@@ -383,7 +383,7 @@ class TestClearmlErrors:
     def test_get_task_raises_on_missing(self, mock_clearml_pkg):
         mock_clearml_pkg.Task.get_task.side_effect = ValueError("Task not found")
 
-        from expflow.clearml import get_task
+        from expflow_pde.clearml import get_task
 
         with pytest.raises(ValueError, match="Task not found"):
             get_task("nonexistent")
@@ -403,7 +403,7 @@ class TestDatasetUpload:
         mock_ds.version = "1.0"
         mock_clearml_pkg.Dataset.create.return_value = mock_ds
 
-        from expflow.clearml import dataset_upload
+        from expflow_pde.clearml import dataset_upload
 
         result = dataset_upload(
             local_path="/data/burgers.hdf5",
@@ -429,7 +429,7 @@ class TestDatasetUpload:
         mock_ds.version = "2.0"
         mock_clearml_pkg.Dataset.create.return_value = mock_ds
 
-        from expflow.clearml import dataset_upload
+        from expflow_pde.clearml import dataset_upload
 
         result = dataset_upload(
             local_path="/data/new.hdf5",
@@ -463,7 +463,7 @@ class TestDatasetDownload:
         mock_ds.get_mutable_local_copy.return_value = "/tmp/download/test_ds"
         mock_clearml_pkg.Dataset.get.return_value = mock_ds
 
-        from expflow.clearml import dataset_download
+        from expflow_pde.clearml import dataset_download
 
         result = dataset_download(
             target_folder="/tmp/download",
@@ -484,7 +484,7 @@ class TestDatasetDownload:
         assert result["local_path"] == "/tmp/download/test_ds"
 
     def test_download_requires_id_or_name(self, mock_clearml_pkg):
-        from expflow.clearml import dataset_download
+        from expflow_pde.clearml import dataset_download
 
         with pytest.raises(ValueError, match="Provide either dataset_id"):
             dataset_download(target_folder="/tmp/download")
@@ -502,7 +502,7 @@ class TestDatasetLineage:
         mock_ds.get_metadata.return_value = "allowed"
         mock_clearml_pkg.Dataset.get.return_value = mock_ds
 
-        from expflow.clearml import dataset_lineage
+        from expflow_pde.clearml import dataset_lineage
 
         lineage = dataset_lineage(dataset_id="child")
 
@@ -535,7 +535,7 @@ class TestDatasetLineage:
 
         mock_clearml_pkg.Dataset.get.side_effect = [child, parent, grandparent]
 
-        from expflow.clearml import dataset_lineage
+        from expflow_pde.clearml import dataset_lineage
 
         lineage = dataset_lineage(dataset_id="c")
 
@@ -569,7 +569,7 @@ class TestModelList:
 
         mock_clearml_pkg.Model.query_models.return_value = [mock_model]
 
-        from expflow.clearml import model_list
+        from expflow_pde.clearml import model_list
 
         models = model_list(project_name="PDEBench", max_results=10)
 
@@ -581,7 +581,7 @@ class TestModelList:
     def test_model_list_empty(self, mock_clearml_pkg):
         mock_clearml_pkg.Model.query_models.return_value = []
 
-        from expflow.clearml import model_list
+        from expflow_pde.clearml import model_list
 
         models = model_list()
         assert models == []
@@ -600,7 +600,7 @@ class TestModelUpload:
         mock_output.uri = "clearml://fileserver/models/model_out_1"
         mock_clearml_pkg.OutputModel.return_value = mock_output
 
-        from expflow.clearml import model_upload
+        from expflow_pde.clearml import model_upload
 
         result = model_upload(
             local_path="checkpoint_50.pt",
@@ -631,7 +631,7 @@ class TestPipelineCreate:
         mock_pipe.id = "pipe_1"
         mock_clearml_pkg.PipelineController.return_value = mock_pipe
 
-        from expflow.clearml import pipeline_create
+        from expflow_pde.clearml import pipeline_create
 
         result = pipeline_create(
             name="test_pipeline",
@@ -646,7 +646,7 @@ class TestPipelineCreate:
         """PipelineController created with correct project."""
         mock_clearml_pkg.PipelineController.return_value = MagicMock()
 
-        from expflow.clearml import pipeline_create
+        from expflow_pde.clearml import pipeline_create
 
         pipeline_create(name="pipe1", project="MyProject")
 
@@ -664,7 +664,7 @@ class TestPipelineCreate:
         """Pipeline with all options forwarded."""
         mock_clearml_pkg.PipelineController.return_value = MagicMock()
 
-        from expflow.clearml import pipeline_create
+        from expflow_pde.clearml import pipeline_create
 
         pipeline_create(
             name="opt_pipe",
@@ -688,7 +688,7 @@ class TestPipelineAddStep:
         mock_pipe = MagicMock()
         mock_clearml_pkg.PipelineController.return_value = mock_pipe
 
-        from expflow.clearml import pipeline_add_step
+        from expflow_pde.clearml import pipeline_add_step
 
         result = pipeline_add_step(
             pipeline_name="pipe1",
@@ -710,7 +710,7 @@ class TestPipelineAddStep:
         mock_pipe = MagicMock()
         mock_clearml_pkg.PipelineController.return_value = mock_pipe
 
-        from expflow.clearml import pipeline_add_step
+        from expflow_pde.clearml import pipeline_add_step
 
         result = pipeline_add_step(
             pipeline_name="pipe1",
@@ -731,7 +731,7 @@ class TestPipelineAddStep:
 
     def test_add_step_requires_task_id_or_name(self, mock_clearml_pkg):
         """Providing neither base_task_id nor base_task_name raises ValueError."""
-        from expflow.clearml import pipeline_add_step
+        from expflow_pde.clearml import pipeline_add_step
 
         with pytest.raises(ValueError, match="Provide either"):
             pipeline_add_step(
@@ -749,7 +749,7 @@ class TestPipelineStart:
         mock_pipe = MagicMock()
         mock_clearml_pkg.PipelineController.return_value = mock_pipe
 
-        from expflow.clearml import pipeline_start
+        from expflow_pde.clearml import pipeline_start
 
         result = pipeline_start(
             pipeline_name="pipe1",
@@ -772,7 +772,7 @@ class TestPipelineStop:
         mock_pipe = MagicMock()
         mock_clearml_pkg.PipelineController.return_value = mock_pipe
 
-        from expflow.clearml import pipeline_stop
+        from expflow_pde.clearml import pipeline_stop
 
         result = pipeline_stop(
             pipeline_name="pipe1",
@@ -796,7 +796,7 @@ class TestPipelineList:
         mock_task.tags = ["pipeline"]
         mock_clearml_pkg.Task.get_tasks.return_value = [mock_task]
 
-        from expflow.clearml import pipeline_list
+        from expflow_pde.clearml import pipeline_list
 
         pipelines = pipeline_list(project_name="PDEBench")
 
@@ -809,7 +809,7 @@ class TestPipelineList:
         """No pipelines returns empty list."""
         mock_clearml_pkg.Task.get_tasks.return_value = []
 
-        from expflow.clearml import pipeline_list
+        from expflow_pde.clearml import pipeline_list
 
         pipelines = pipeline_list()
 
@@ -830,7 +830,7 @@ class TestInitTracking:
         mock_task.id = "task_init_1"
         mock_clearml_pkg.Task.init.return_value = mock_task
 
-        from expflow.clearml import init_tracking
+        from expflow_pde.clearml import init_tracking
 
         result = init_tracking(
             task_name="test_run",
@@ -846,7 +846,7 @@ class TestInitTracking:
         """Task.init called with auto_connect_frameworks dict."""
         mock_clearml_pkg.Task.init.return_value = MagicMock()
 
-        from expflow.clearml import init_tracking
+        from expflow_pde.clearml import init_tracking
 
         init_tracking(task_name="t", project="P")
 
@@ -859,7 +859,7 @@ class TestInitTracking:
         """capture_tensorboard=False omits tensorboard from frameworks."""
         mock_clearml_pkg.Task.init.return_value = MagicMock()
 
-        from expflow.clearml import init_tracking
+        from expflow_pde.clearml import init_tracking
 
         init_tracking(task_name="t", project="P", capture_tensorboard=False)
 
@@ -874,7 +874,7 @@ class TestInitTracking:
         mock_task.id = "t1"
         mock_clearml_pkg.Task.init.return_value = mock_task
 
-        from expflow.clearml import init_tracking
+        from expflow_pde.clearml import init_tracking
 
         result = init_tracking(task_name="t", project="P", capture_graph=False)
         assert result["graph_uploaded"] is False
@@ -890,7 +890,7 @@ class TestSchedulerCreate:
 
     def test_scheduler_create_returns_status(self, mock_clearml_pkg):
         """Creating a scheduler returns 'created'."""
-        from expflow.clearml import scheduler_create
+        from expflow_pde.clearml import scheduler_create
 
         result = scheduler_create()
 
@@ -898,7 +898,7 @@ class TestSchedulerCreate:
 
     def test_scheduler_create_passes_project(self, mock_clearml_pkg):
         """scheduler_create returns status without creating instance."""
-        from expflow.clearml import scheduler_create
+        from expflow_pde.clearml import scheduler_create
 
         result = scheduler_create(
             force_create_task_name="my_scheduler",
@@ -917,7 +917,7 @@ class TestSchedulerAddTask:
         mock_scheduler.add_task.return_value = True
         mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
 
-        from expflow.clearml import scheduler_add_task
+        from expflow_pde.clearml import scheduler_add_task
 
         result = scheduler_add_task(
             task_id="task_1",
@@ -949,7 +949,7 @@ class TestSchedulerAddTask:
         mock_scheduler.add_task.return_value = True
         mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
 
-        from expflow.clearml import scheduler_add_task
+        from expflow_pde.clearml import scheduler_add_task
 
         result = scheduler_add_task(task_id="task_1", queue="default", minute=0, hour=9, day=1)
 
@@ -977,7 +977,7 @@ class TestSchedulerList:
         mock_scheduler.get_scheduled_tasks.return_value = [mock_job1, mock_job2]
         mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
 
-        from expflow.clearml import scheduler_list
+        from expflow_pde.clearml import scheduler_list
 
         jobs = scheduler_list()
 
@@ -991,7 +991,7 @@ class TestSchedulerList:
         mock_scheduler.get_scheduled_tasks.return_value = []
         mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
 
-        from expflow.clearml import scheduler_list
+        from expflow_pde.clearml import scheduler_list
 
         assert scheduler_list() == []
 
@@ -1005,7 +1005,7 @@ class TestSchedulerRemove:
         mock_scheduler.remove_task.return_value = True
         mock_clearml_pkg.automation.TaskScheduler.return_value = mock_scheduler
 
-        from expflow.clearml import scheduler_remove_task
+        from expflow_pde.clearml import scheduler_remove_task
 
         result = scheduler_remove_task(task_id="task_1")
 

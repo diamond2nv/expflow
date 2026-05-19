@@ -29,7 +29,7 @@ def _built_wheel_path() -> str | None:
     return os.path.join(dist_dir, candidates[-1]) if candidates else None
 
 
-ENTRY_SCRIPT = "#!/usr/bin/env python3\nimport sys\nfrom expflow.cli import app\nsys.exit(app())\n"
+ENTRY_SCRIPT = "#!/usr/bin/env python3\nimport sys\nfrom expflow_pde.cli import app\nsys.exit(app())\n"
 
 
 def _run_entry_point(args: list[str], **subprocess_kwargs) -> subprocess.CompletedProcess:
@@ -87,7 +87,7 @@ class TestEntryPoint:
         """Entry point --version works correctly."""
         result = _run_entry_point(["version"])
         assert result.returncode == 0
-        assert result.stdout.strip() == "expflow v0.1.0"
+        assert result.stdout.strip() == "expflow v0.3.0"
         assert result.stderr == ""
 
     def test_entry_point_help(self):
@@ -115,7 +115,7 @@ class TestEntryPoint:
         """Entry point info shows system info (no clearml needed)."""
         result = _run_entry_point(["info"])
         assert result.returncode == 0
-        assert "Platform:" in result.stdout
+        assert "expflow" in result.stdout
         assert "Python:" in result.stdout
 
     def test_entry_point_clearml_help(self):
@@ -170,7 +170,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert ver_result.returncode == 0, f"version failed: {ver_result.stderr}"
-            assert ver_result.stdout.strip() == "expflow v0.1.0"
+            assert ver_result.stdout.strip() == "expflow v0.3.0"
 
             # info command should work
             info_result = subprocess.run(
@@ -180,7 +180,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert info_result.returncode == 0, f"info failed: {info_result.stderr}"
-            assert "Platform:" in info_result.stdout
+            assert "expflow" in info_result.stdout
 
             # clearml command without clearml SDK -> clean ModuleNotFoundError
             clearml_result = subprocess.run(

@@ -971,7 +971,7 @@ def init_tracking(
         Dict with task_id, task_name, project, graph_uploaded.
 
     Example:
-        from expflow.clearml import init_tracking
+        from expflow_pde.clearml import init_tracking
         task = init_tracking(
             task_name="FNO_burgers_lr0.001",
             tags=["fno", "burgers"],

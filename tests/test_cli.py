@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from expflow.cli import app
+from expflow_pde.cli import app
 from tests.helpers import _make_mock_queue, _make_mock_task
 
 runner = CliRunner()
@@ -45,16 +45,34 @@ def mock_clearml_cli() -> MagicMock:
 class TestVersionInfo:
     """version and info commands."""
 
-    def test_version_output(self):
+    @patch("expflow_pde.cli.subprocess.run")
+    def test_version_output(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "v0.1.0-18-gabc123"
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
-        assert result.stdout.startswith("expflow v0.1.0")
+        assert "expflow v0.3.0" in result.stdout
 
-    def test_info_output(self):
+    @patch("expflow_pde.cli.subprocess.run")
+    def test_version_verbose(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "v0.1.0-18-gabc123"
+        result = runner.invoke(app, ["version", "--verbose"])
+        assert result.exit_code == 0
+        assert "expflow v0.3.0" in result.stdout
+        assert "Build:" in result.stdout
+
+    @patch("expflow_pde.cli.subprocess.run")
+    def test_info_output(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "v0.1.0-18-gabc123"
         result = runner.invoke(app, ["info"])
         assert result.exit_code == 0
-        assert "Platform:" in result.stdout
+        assert "expflow" in result.stdout
+        assert "v0.3.0" in result.stdout
+        assert "Build:" in result.stdout
         assert "Python:" in result.stdout
+        assert "clearml" in result.stdout or "not installed" in result.stdout
 
 
 # ══════════════════════════════════════════════════════════════

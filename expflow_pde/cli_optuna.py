@@ -38,7 +38,7 @@ def create_study_cmd(
     ),
 ) -> None:
     """Create a new Optuna study."""
-    from expflow.optuna import create_study
+    from expflow_pde.optuna import create_study
 
     result = create_study(study_name, direction=direction, storage=storage)
     print(f"Study created: {result['name']}")
@@ -56,7 +56,7 @@ def list_studies_cmd(
     ),
 ) -> None:
     """List all Optuna studies."""
-    from expflow.optuna import list_studies
+    from expflow_pde.optuna import list_studies
 
     studies = list_studies(storage=storage)
 
@@ -83,7 +83,7 @@ def get_study_cmd(
     ),
 ) -> None:
     """Show details for a study."""
-    from expflow.optuna import get_study
+    from expflow_pde.optuna import get_study
 
     s = get_study(study_name, storage=storage)
     print(f"Name:      {s['name']}")
@@ -108,7 +108,7 @@ def delete_study_cmd(
     ),
 ) -> None:
     """Delete a study."""
-    from expflow.optuna import delete_study
+    from expflow_pde.optuna import delete_study
 
     result = delete_study(study_name, storage=storage)
     print(f"Study '{result['study_name']}' deleted.")
@@ -128,7 +128,7 @@ def ask_cmd(
     ),
 ) -> None:
     """Ask for next trial parameters."""
-    from expflow.optuna import ask_trial
+    from expflow_pde.optuna import ask_trial
 
     result = ask_trial(study_name, storage=storage)
     print(f"Trial #{result['trial_number']}:")
@@ -149,7 +149,7 @@ def tell_cmd(
     ),
 ) -> None:
     """Report a trial result."""
-    from expflow.optuna import tell_trial
+    from expflow_pde.optuna import tell_trial
 
     result = tell_trial(study_name, trial_number, value, storage=storage)
     print(f"Trial #{result['trial_number']}: value={result['value']} reported.")
@@ -181,7 +181,7 @@ def plot_cmd(
     ),
 ) -> None:
     """Generate optimization visualization."""
-    from expflow.optuna import plot_study
+    from expflow_pde.optuna import plot_study
 
     result = plot_study(
         study_name,
@@ -208,7 +208,7 @@ def hpo_run_cmd(
     ),
 ) -> None:
     """Run hyperparameter optimization on a script. Wraps Optuna study + trials."""
-    from expflow.hpo import run_hpo
+    from expflow_pde.hpo import run_hpo
 
     result = run_hpo(
         script=script,

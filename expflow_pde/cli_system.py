@@ -20,7 +20,7 @@ def get_system_app() -> typer.Typer:
 @system_app.command("status")
 def status_cmd() -> None:
     """Check health of measurement plane components."""
-    from expflow.status import check_status
+    from expflow_pde.status import check_status
 
     results = check_status()
     for name, info in results.items():
@@ -40,7 +40,7 @@ def board_cmd(
     ),
 ) -> None:
     """Launch TensorBoard."""
-    from expflow.board import start_board
+    from expflow_pde.board import start_board
 
     result = start_board(port=port, logdir=logdir)
     if "error" in result:

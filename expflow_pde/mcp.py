@@ -28,7 +28,7 @@ def start_mcp() -> None:
 def _try_serve() -> None:
     """Attempt to serve MCP tools via FastMCP."""
     try:
-        from expflow.mcp_server import serve
+        from expflow_pde.mcp_server import serve
 
         serve()
     except ImportError:

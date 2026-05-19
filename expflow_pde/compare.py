@@ -15,7 +15,7 @@ def compare_tasks(task_id_a: str, task_id_b: str) -> dict[str, Any]:
     Returns:
         Dict with 'a' and 'b' task summaries, or error dict.
     """
-    from expflow.clearml import get_task
+    from expflow_pde.clearml import get_task
 
     try:
         task_a = get_task(task_id_a)

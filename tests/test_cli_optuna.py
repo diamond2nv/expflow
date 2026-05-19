@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from expflow.cli import app
+from expflow_pde.cli import app
 
 runner = CliRunner()
 

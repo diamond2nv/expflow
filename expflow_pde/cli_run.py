@@ -35,7 +35,7 @@ def submit_cmd(
     Use --use-clearml to wrap a Python script with automatic Task.init injection,
     so the script runs via clearml-agent without any code modification.
     """
-    from expflow.dispatcher import dispatch_experiment
+    from expflow_pde.dispatcher import dispatch_experiment
 
     tag_list = tags.split(",") if tags else None
     script_args: dict[str, str] = {}
@@ -64,7 +64,7 @@ def submit_cmd(
 @run_app.command("list")
 def list_cmd() -> None:
     """List all experiments."""
-    from expflow.dispatcher import list_experiments
+    from expflow_pde.dispatcher import list_experiments
 
     exps = list_experiments()
 
@@ -84,7 +84,7 @@ def status_cmd(
     experiment_id: str = typer.Argument(..., help="Experiment ID"),
 ) -> None:
     """Show experiment status."""
-    from expflow.dispatcher import get_experiment_status
+    from expflow_pde.dispatcher import get_experiment_status
 
     result = get_experiment_status(experiment_id)
     if "error" in result:
@@ -103,7 +103,7 @@ def cancel_cmd(
     experiment_id: str = typer.Argument(..., help="Experiment ID"),
 ) -> None:
     """Cancel an experiment."""
-    from expflow.dispatcher import cancel_experiment
+    from expflow_pde.dispatcher import cancel_experiment
 
     result = cancel_experiment(experiment_id)
     if "error" in result:

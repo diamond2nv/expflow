@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """expflow: experiment workflow orchestration toolkit for PDEBench/Agentic4Sci."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Core API — lazy import at call time, exposed for convenience
-from expflow.clearml import (
+from expflow_pde.clearml import (
     annotate_compliance,
     dataset_download,
     dataset_lineage,

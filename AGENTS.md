@@ -7,7 +7,7 @@ working on this project. It describes the project structure, key patterns, pitfa
 
 ```
 ~/Gitlab/Agentic4Sci/expflow/
-├── expflow/             # Main Python package (12 modules)
+├── expflow_pde/         # Main Python package (12 modules)
 │   ├── __init__.py      # Version, exports
 │   ├── config.py        # YAML + .env config loader
 │   ├── cli.py           # Typer CLI — 5 top-level commands + 7 command groups
@@ -77,7 +77,7 @@ expflow
 ### Config Loading
 
 ```python
-from expflow.config import load_config, get
+from expflow_pde.config import load_config, get
 
 cfg = load_config()            # Load YAML + .env
 val = get("clearml.api")       # Dot-separated access
@@ -156,7 +156,7 @@ pyright .
 python -m pytest tests/ -v
 
 # 4. Verify version alignment
-grep __version__ expflow/__init__.py  # e.g. '0.1.0'
+grep __version__ expflow_pde/__init__.py  # e.g. '0.1.0'
 grep ^version pyproject.toml           # Must match
 
 # 5. Build + verify
@@ -175,7 +175,7 @@ twine upload dist/*
 
 - `ruff check .` must pass with **zero errors** (including tests/)
 - `pytest` must pass all tests
-- `pyright` zero errors in `expflow/` package
+- `pyright` zero errors in `expflow_pde/` package
 
 ## Git Conventions
 
@@ -189,10 +189,10 @@ git tag v0.1.0          # Semantic versioning
 
 ## Versioning
 
-**Current version: 0.1.0** (pre-release)
+**Current version: 0.3.0** (pre-release)
 - Semantic versioning with 0.x.y — x=feature iteration, y=fix/minor
 - Don't bump to 1.0.0 before official release
-- Version defined in `expflow/__init__.py` `__version__`
+- Version defined in `expflow_pde/__init__.py` `__version__`
 - Sync `pyproject.toml` version field
 - Tag: `git tag v0.x.y && git push --tags`
 
@@ -206,7 +206,7 @@ Tests must reset cache between runs. Use pytest fixtures:
 ```python
 @pytest.fixture(autouse=True)
 def reset_config():
-    from expflow import config
+    from expflow_pde import config
     config._config_cache.clear()
     yield
 ```

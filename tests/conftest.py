@@ -13,7 +13,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def reset_config_cache() -> Generator[None, None, None]:
     """Reset config cache before each test to avoid cross-test pollution."""
-    from expflow import config
+    from expflow_pde import config
 
     config._config_cache.clear()
     config._env_cache = None

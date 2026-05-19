@@ -30,7 +30,7 @@ def list_tasks_cmd(
     ),
 ) -> None:
     """List ClearML tasks."""
-    from expflow.clearml import list_tasks
+    from expflow_pde.clearml import list_tasks
 
     status_list = status.split(",") if status else None
     tasks = list_tasks(
@@ -54,7 +54,7 @@ def get_task_cmd(
     task_id: str = typer.Argument(..., help="Task ID"),
 ) -> None:
     """Show details for a single task."""
-    from expflow.clearml import get_task
+    from expflow_pde.clearml import get_task
 
     t = get_task(task_id)
     print(f"ID:       {t['id']}")
@@ -74,7 +74,7 @@ def enqueue_cmd(
     queue: str = typer.Option("default", "--queue", "-q", help="Queue name"),
 ) -> None:
     """Enqueue a task to a queue."""
-    from expflow.clearml import enqueue_task
+    from expflow_pde.clearml import enqueue_task
 
     result = enqueue_task(task_id, queue_name=queue)
     print(f"Task {result['task_id']} enqueued to '{result['queue']}' (status: {result['status']})")
@@ -85,7 +85,7 @@ def dequeue_cmd(
     task_id: str = typer.Argument(..., help="Task ID to dequeue"),
 ) -> None:
     """Dequeue a task."""
-    from expflow.clearml import dequeue_task
+    from expflow_pde.clearml import dequeue_task
 
     result = dequeue_task(task_id)
     print(f"Task {result['task_id']} dequeued (status: {result['status']})")
@@ -94,7 +94,7 @@ def dequeue_cmd(
 @clearml_app.command("queues")
 def list_queues_cmd() -> None:
     """List all available queues."""
-    from expflow.clearml import list_queues
+    from expflow_pde.clearml import list_queues
 
     queues = list_queues()
 
@@ -114,7 +114,7 @@ def compare_cmd(
     task_id_b: str = typer.Argument(..., help="Second task ID"),
 ) -> None:
     """Compare two tasks side by side."""
-    from expflow.compare import compare_tasks
+    from expflow_pde.compare import compare_tasks
 
     result = compare_tasks(task_id_a, task_id_b)
     if "error" in result:
@@ -158,7 +158,7 @@ def dataset_register_cmd(
     )
     # annotate_compliance requires a dataset_id, not a name/path
     # This is a best-effort: look up dataset by name or warn
-    from expflow.clearml import annotate_compliance, list_datasets
+    from expflow_pde.clearml import annotate_compliance, list_datasets
 
     datasets = list_datasets(name_filter=name)
     ds = next((d for d in datasets if d["name"] == name), None)
@@ -189,7 +189,7 @@ def dataset_list_cmd(
     ),
 ) -> None:
     """List registered datasets with compliance info."""
-    from expflow.clearml import list_datasets
+    from expflow_pde.clearml import list_datasets
 
     datasets = list_datasets(
         name_filter=name_filter,
@@ -229,7 +229,7 @@ def dataset_upload_cmd(
     ),
 ) -> None:
     """Upload local files to clearml Fileserver and register as a Dataset."""
-    from expflow.clearml import dataset_upload
+    from expflow_pde.clearml import dataset_upload
 
     parent_list = parent_ids.split(",") if parent_ids else None
     result = dataset_upload(
@@ -259,7 +259,7 @@ def dataset_download_cmd(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing target folder"),
 ) -> None:
     """Download a Dataset from clearml Fileserver to a local folder."""
-    from expflow.clearml import dataset_download
+    from expflow_pde.clearml import dataset_download
 
     result = dataset_download(
         target_folder=target_folder,
@@ -280,7 +280,7 @@ def dataset_lineage_cmd(
     depth: int = typer.Option(10, "--depth", "-d", help="Max recursion depth"),
 ) -> None:
     """Trace dataset lineage via parent chain."""
-    from expflow.clearml import dataset_lineage
+    from expflow_pde.clearml import dataset_lineage
 
     lineage = dataset_lineage(dataset_id=dataset_id, depth=depth)
     if not lineage:
@@ -306,7 +306,7 @@ def model_list_cmd(
     max_results: int = typer.Option(20, "--max", "-m", help="Max results"),
 ) -> None:
     """List registered checkpoint models."""
-    from expflow.clearml import model_list
+    from expflow_pde.clearml import model_list
 
     models = model_list(
         project_name=project,
@@ -333,7 +333,7 @@ def model_upload_cmd(
     model_name: Optional[str] = typer.Option(None, "--name", "-n", help="Model display name"),
 ) -> None:
     """Upload a model checkpoint to clearml Model store."""
-    from expflow.clearml import model_upload
+    from expflow_pde.clearml import model_upload
 
     result = model_upload(
         local_path=local_path,
@@ -358,7 +358,7 @@ def pipeline_create_cmd(
     abort_on_failure: bool = typer.Option(False, "--abort-on-failure", help="Abort on failure"),
 ) -> None:
     """Create a pipeline controller."""
-    from expflow.clearml import pipeline_create
+    from expflow_pde.clearml import pipeline_create
 
     result = pipeline_create(
         name=name,
@@ -384,7 +384,7 @@ def pipeline_add_step_cmd(
     execution_queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Execution queue"),
 ) -> None:
     """Add a step to an existing pipeline."""
-    from expflow.clearml import pipeline_add_step
+    from expflow_pde.clearml import pipeline_add_step
 
     parent_list = parents.split(",") if parents else None
     result = pipeline_add_step(
@@ -408,7 +408,7 @@ def pipeline_start_cmd(
     queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Execution queue"),
 ) -> None:
     """Start a pipeline controller."""
-    from expflow.clearml import pipeline_start
+    from expflow_pde.clearml import pipeline_start
 
     result = pipeline_start(
         pipeline_name=pipeline_name,
@@ -425,7 +425,7 @@ def pipeline_stop_cmd(
     project: str = typer.Option("PDEBench", "--project", "-p", help="Project name"),
 ) -> None:
     """Stop a running pipeline."""
-    from expflow.clearml import pipeline_stop
+    from expflow_pde.clearml import pipeline_stop
 
     result = pipeline_stop(
         pipeline_name=pipeline_name,
@@ -441,7 +441,7 @@ def pipeline_list_cmd(
     max_results: int = typer.Option(20, "--max", "-m", help="Max results"),
 ) -> None:
     """List pipeline controller tasks."""
-    from expflow.clearml import pipeline_list
+    from expflow_pde.clearml import pipeline_list
 
     pipelines = pipeline_list(
         project_name=project,

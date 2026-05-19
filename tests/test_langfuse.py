@@ -96,7 +96,7 @@ class TestListTraces:
             _make_mock_trace("t2", "run_b", "user2", tags=[]),
         ]
 
-        from expflow.langfuse import list_traces
+        from expflow_pde.langfuse import list_traces
 
         result = list_traces()
 
@@ -110,7 +110,7 @@ class TestListTraces:
         """Empty traces returns empty list."""
         mock_langfuse_client.Langfuse.return_value.api.trace.list.return_value = []
 
-        from expflow.langfuse import list_traces
+        from expflow_pde.langfuse import list_traces
 
         assert list_traces() == []
 
@@ -118,7 +118,7 @@ class TestListTraces:
         """Filters are passed through."""
         mock_langfuse_client.Langfuse.return_value.api.trace.list.return_value = []
 
-        from expflow.langfuse import list_traces
+        from expflow_pde.langfuse import list_traces
 
         list_traces(limit=50, user_id="u1", tags=["prod"], session_id="s1")
 
@@ -143,7 +143,7 @@ class TestGetTrace:
             "t1", "infer", "u1", cost=0.12
         )
 
-        from expflow.langfuse import get_trace
+        from expflow_pde.langfuse import get_trace
 
         result = get_trace("t1")
 
@@ -152,7 +152,7 @@ class TestGetTrace:
         assert result["user_id"] == "u1"
 
     def test_get_trace_passes_id(self, mock_langfuse_client):
-        from expflow.langfuse import get_trace
+        from expflow_pde.langfuse import get_trace
 
         get_trace("t1")
         mock_langfuse_client.Langfuse.return_value.api.trace.get.assert_called_with("t1")
@@ -170,7 +170,7 @@ class TestGetTraceCost:
         trace = _make_mock_trace("t1", cost=0.05)
         mock_langfuse_client.Langfuse.return_value.api.trace.get.return_value = trace
 
-        from expflow.langfuse import get_trace_cost
+        from expflow_pde.langfuse import get_trace_cost
 
         result = get_trace_cost("t1")
 
@@ -193,7 +193,7 @@ class TestSessions:
             _make_mock_session("s2", "u2"),
         ]
 
-        from expflow.langfuse import list_sessions
+        from expflow_pde.langfuse import list_sessions
 
         result = list_sessions()
 
@@ -204,7 +204,7 @@ class TestSessions:
     def test_list_sessions_empty(self, mock_langfuse_client):
         mock_langfuse_client.Langfuse.return_value.api.session.list.return_value = []
 
-        from expflow.langfuse import list_sessions
+        from expflow_pde.langfuse import list_sessions
 
         assert list_sessions() == []
 
@@ -213,7 +213,7 @@ class TestSessions:
             _make_mock_session("s1", "u1")
         )
 
-        from expflow.langfuse import get_session
+        from expflow_pde.langfuse import get_session
 
         result = get_session("s1")
 
@@ -236,7 +236,7 @@ class TestMetrics:
             "total_observations": 500,
         }
 
-        from expflow.langfuse import get_metrics
+        from expflow_pde.langfuse import get_metrics
 
         result = get_metrics()
 

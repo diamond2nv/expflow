@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "expflow"
-version = "0.2.0"
+name = "expflow-pde"
+version = "0.3.0"
 description = "Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci — clearml + optuna + langfuse integration, dataset compliance, distributed experiment dispatch."
 authors = [
     {name = "Li Shen"},
@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "requests>=2.28",
     "typer>=0.9",
+    "fysom>=2.1.6",
 ]
 
 [project.urls]
@@ -37,7 +38,6 @@ Documentation = "https://github.com/diamond2nv/expflow"
 [project.optional-dependencies]
 clearml = [
     "clearml>=1.17",
-    "clearml-mcp>=0.1",
 ]
 optuna = [
     "optuna>=4.0",
@@ -50,6 +50,12 @@ mcp = [
     "expflow[optuna]",
     "expflow[langfuse]",
 ]
+pipeline = [
+    "clearml>=1.17",
+]
+all = [
+    "expflow[clearml,optuna,langfuse,pipeline]",
+]
 dev = [
     "ruff",
     "pyright",
@@ -59,10 +65,10 @@ dev = [
 ]
 
 [project.scripts]
-expflow = "expflow.cli:app"
+expflow = "expflow_pde.cli:app"
 
 [tool.setuptools.packages.find]
-include = ["expflow*"]
+include = ["expflow_pde*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -90,8 +96,8 @@ select = ["E", "W", "F", "I", "N"]
 ignore = ["E501"]
 
 [tool.pyright]
-include = ["expflow"]
+include = ["expflow_pde"]
 exclude = ["tests"]
 reportMissingImports = true
 reportMissingTypeStubs = false
-strict = ["expflow/**/*.py"]
+strict = ["expflow_pde/**/*.py"]

@@ -28,7 +28,7 @@ class TestValidateExperiment:
 
     def test_validate_returns_checklist(self):
         """validate_experiment returns a dict with check items."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment(
             experiment_id="exp_123",
@@ -43,14 +43,14 @@ class TestValidateExperiment:
 
     def test_validate_has_timestamp(self):
         """validate result includes timestamp."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment("exp_123", {}, {})
         assert "timestamp" in result
 
     def test_validate_config_presence(self):
         """Validate checks if config is present."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment("exp_123", {"lr": 0.001}, {})
         config_check = next(
@@ -62,7 +62,7 @@ class TestValidateExperiment:
 
     def test_validate_empty_config_fails(self):
         """Empty config fails the config check."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment("exp_123", {}, {"final_loss": 0.05})
         config_check = next(
@@ -74,7 +74,7 @@ class TestValidateExperiment:
 
     def test_validate_metrics_presence(self):
         """Validate checks if metrics are present."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment("exp_123", {"lr": 0.001}, {"final_loss": 0.05})
         metrics_check = next(
@@ -86,7 +86,7 @@ class TestValidateExperiment:
 
     def test_validate_empty_metrics_fails(self):
         """Empty metrics fails the metrics check."""
-        from expflow.audit import validate_experiment
+        from expflow_pde.audit import validate_experiment
 
         result = validate_experiment("exp_123", {"lr": 0.001}, {})
         metrics_check = next(
@@ -107,7 +107,7 @@ class TestCheckDatasetCompliance:
 
     def test_check_compliance_allowed(self):
         """Allowed dataset passes."""
-        from expflow.audit import check_dataset_compliance
+        from expflow_pde.audit import check_dataset_compliance
 
         result = check_dataset_compliance(
             dataset_name="burgers_nu0.001",
@@ -117,7 +117,7 @@ class TestCheckDatasetCompliance:
 
     def test_check_compliance_forbidden(self):
         """Forbidden dataset fails."""
-        from expflow.audit import check_dataset_compliance
+        from expflow_pde.audit import check_dataset_compliance
 
         result = check_dataset_compliance(
             dataset_name="synthetic_burgers",
@@ -127,14 +127,14 @@ class TestCheckDatasetCompliance:
 
     def test_check_compliance_unknown(self):
         """Unknown compliance raises ValueError."""
-        from expflow.audit import check_dataset_compliance
+        from expflow_pde.audit import check_dataset_compliance
 
         with pytest.raises(ValueError, match="compliance"):
             check_dataset_compliance("ds", "invalid")
 
     def test_check_compliance_returns_metadata(self):
         """Result includes dataset name and compliance."""
-        from expflow.audit import check_dataset_compliance
+        from expflow_pde.audit import check_dataset_compliance
 
         result = check_dataset_compliance("burgers_nu0.001", "allowed")
         assert result["dataset_name"] == "burgers_nu0.001"
@@ -151,7 +151,7 @@ class TestGenerateReport:
 
     def test_generate_report_returns_dict(self):
         """generate_report returns a dict with markdown content."""
-        from expflow.audit import generate_report
+        from expflow_pde.audit import generate_report
 
         result = generate_report(
             experiment_id="exp_123",
@@ -165,7 +165,7 @@ class TestGenerateReport:
 
     def test_report_includes_metrics_table(self):
         """Report markdown includes a metrics table."""
-        from expflow.audit import generate_report
+        from expflow_pde.audit import generate_report
 
         result = generate_report(
             "exp_123",
@@ -178,7 +178,7 @@ class TestGenerateReport:
 
     def test_report_includes_validation(self):
         """Report includes validation results."""
-        from expflow.audit import generate_report
+        from expflow_pde.audit import generate_report
 
         result = generate_report("exp_123", {"lr": 0.001}, {"final_loss": 0.05})
         assert "config" in result["markdown"].lower()
