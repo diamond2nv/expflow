@@ -167,7 +167,7 @@ def _get_task_metrics(task_id: str) -> dict[str, float]:
         task_id: clearml task ID.
 
     Returns:
-        Dict of metric name → latest value.
+        Dict of metric name -> latest value.
     """
     try:
         from clearml import Task
@@ -180,6 +180,7 @@ def _get_task_metrics(task_id: str) -> dict[str, float]:
     except Exception:
         return {}
 
+    # Flatten: group/series -> {series: value}
     flat: dict[str, float] = {}
     for group_name, series_dict in scalar_metrics.items():
         if not isinstance(series_dict, dict):
