@@ -51,7 +51,7 @@ class TestVersionInfo:
         mock_run.return_value.stdout = "v0.1.0-18-gabc123"
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
-        assert "expflow v0.3.0" in result.stdout
+        assert "expflow v0.4.0" in result.stdout
 
     @patch("expflow_pde.cli.subprocess.run")
     def test_version_verbose(self, mock_run):
@@ -59,7 +59,7 @@ class TestVersionInfo:
         mock_run.return_value.stdout = "v0.1.0-18-gabc123"
         result = runner.invoke(app, ["version", "--verbose"])
         assert result.exit_code == 0
-        assert "expflow v0.3.0" in result.stdout
+        assert "expflow v0.4.0" in result.stdout
         assert "Build:" in result.stdout
 
     @patch("expflow_pde.cli.subprocess.run")
@@ -69,7 +69,7 @@ class TestVersionInfo:
         result = runner.invoke(app, ["info"])
         assert result.exit_code == 0
         assert "expflow" in result.stdout
-        assert "v0.3.0" in result.stdout
+        assert "v0.4.0" in result.stdout
         assert "Build:" in result.stdout
         assert "Python:" in result.stdout
         assert "clearml" in result.stdout or "not installed" in result.stdout

@@ -89,7 +89,7 @@ class TestEntryPoint:
         """Entry point --version works correctly."""
         result = _run_entry_point(["version"])
         assert result.returncode == 0
-        assert result.stdout.strip() == "expflow v0.3.0"
+        assert result.stdout.strip() == "expflow v0.4.0"
         assert result.stderr == ""
 
     def test_entry_point_help(self):
@@ -172,7 +172,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert ver_result.returncode == 0, f"version failed: {ver_result.stderr}"
-            assert ver_result.stdout.strip() == "expflow v0.3.0"
+            assert ver_result.stdout.strip() == "expflow v0.4.0"
 
             # info command should work
             info_result = subprocess.run(

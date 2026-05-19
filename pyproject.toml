@@ -64,6 +64,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
+    "torch>=2.0",
 ]
 
 [project.scripts]

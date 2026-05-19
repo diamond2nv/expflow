@@ -264,15 +264,6 @@ def losses_cmd(
     ),
 ) -> None:
     """List all available PDE loss functions or show details for one."""
-    from expflow_pde.losses import (
-        H1relLoss,
-        H1relLoss_1D,
-        LprelLoss,
-        MSELoss_rel,
-        SmoothL1Loss_rel,
-        loss_selector,
-        lpLoss,
-    )
 
     loss_info = {
         "l1_rel": {
