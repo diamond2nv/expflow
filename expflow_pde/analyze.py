@@ -815,3 +815,80 @@ def suggest_next_params(
         "task_id": task_id,
         "degradation_pattern": pattern,
     }
+
+
+# ── Experiment sync from clearml ──
+
+
+def sync_task_meta_from_clearml(
+    project_name: str = "PDEBench",
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch latest completed task metrics from clearml, update task_meta.yaml.
+
+    Groups completed tasks by tag matching (task1/task2/task3), finds the
+    max seg_total per group, and updates the YAML current_best values.
+
+    Args:
+        project_name: clearml project name to search (default: PDEBench).
+        tags: Optional filter tags (e.g. ['task1']).
+
+    Returns:
+        Dict with updated tasks and their new best scores.
+    """
+    from expflow_pde.clearml import list_tasks
+
+    tasks = list_tasks(
+        project_name=project_name,
+        tags=tags,
+        status=["completed"],
+    )
+
+    if not tasks:
+        return {"updated": [], "message": "No completed tasks found"}
+
+    # Group by inferred task_id from tags
+    task_groups: dict[str, list[dict[str, Any]]] = {
+        "task1": [],
+        "task2": [],
+        "task3": [],
+    }
+    for t in tasks:
+        t_tags = t.get("tags", [])
+        for task_id in ("task1", "task2", "task3"):
+            if task_id in t_tags:
+                task_groups[task_id].append(t)
+
+    updated: list[dict[str, Any]] = []
+    for task_id, group in task_groups.items():
+        if not group:
+            continue
+
+        meta = get_task_meta(task_id)
+
+        current_best = meta.get("current_best_total") or 0
+
+        best_task = max(
+            group,
+            key=lambda x: x.get("last_iteration", 0),
+        )
+        new_total = best_task.get("last_iteration", 0) or 0
+
+        # Update if better
+        if new_total > current_best:
+            update_task_meta(task_id, {
+                "current_best_seg": round(float(new_total), 2),
+                "current_best_total": round(float(new_total), 2),
+                "remaining_headroom": max(
+                    0,
+                    (meta.get("max_score") or 150) - new_total,
+                ),
+            })
+            updated.append({
+                "task_id": task_id,
+                "previous_best": current_best,
+                "new_best": new_total,
+                "best_task_id": best_task.get("id"),
+            })
+
+    return {"updated": updated, "message": f"Synced {len(updated)} tasks"}

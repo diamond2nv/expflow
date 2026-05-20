@@ -454,3 +454,24 @@ def deep_cmd(
     print(f"    {'=' * 55}")
     print(f"\n  To run with deepseek-v4-pro:")
     print(f"    hermes \"Deep analysis of experiment {task_id}\"")
+
+
+@analyze_app.command("sync")
+def sync_cmd(
+    project: str = typer.Option("PDEBench", "--project", "-p",
+        help="clearml project name"),
+) -> None:
+    """Sync task metadata from clearml completed experiments."""
+    from expflow_pde.analyze import sync_task_meta_from_clearml
+
+    print(f"  Syncing from clearml project '{project}'...")
+    result = sync_task_meta_from_clearml(project_name=project)
+    updated = result.get("updated", [])
+    if not updated:
+        print(f"  No updates found.")
+        return
+
+    print(f"  Updated {len(updated)} tasks:")
+    for u in updated:
+        print(f"    {u['task_id']}: {u['previous_best']} -> {u['new_best']} "
+              f"(task: {u['best_task_id']})")

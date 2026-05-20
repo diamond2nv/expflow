@@ -175,6 +175,23 @@ _ = _lazy_register_analyze()
 _ = _lazy_register_pipeline()
 
 
+def _lazy_register_hypothesis():
+    from expflow_pde.cli_hypothesis import hypothesis_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "hypothesis":
+            return hypothesis_app
+    app.add_typer(
+        hypothesis_app,
+        name="hypothesis",
+        help="Record and track experiment hypotheses (negative result logging)",
+    )
+    return hypothesis_app
+
+
+_ = _lazy_register_hypothesis()
+
+
 def _lazy_register_iterate():
     from expflow_pde.cli_iterate import iterate_app
 

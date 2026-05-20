@@ -103,6 +103,67 @@ def get_task(task_id: str) -> dict[str, Any]:
     return _serialize_task(task)
 
 
+def get_task_scalars(task_id: str) -> dict[str, Any] | None:
+    """Fetch reported scalars from a clearml task.
+
+    Returns a flat dict with scalar title/series -> latest value mappings,
+    or None if the task has no reported scalars.
+    """
+    task_cls = _get_task_module()  # noqa: N806
+    task = task_cls.get_task(task_id=task_id)
+
+    # Read scalars from the task's last metrics event
+    try:
+        models = task.models.get("output", [])
+    except AttributeError:
+        models = []
+
+    # Try reading scalars directly from the task
+    scalars: dict[str, Any] = {}
+    try:
+        reported = task.get_last_scalars()
+        if reported:
+            for title, series_dict in reported.items():
+                for series, value in series_dict.items():
+                    scalars[f"{title}/{series}"] = value
+    except Exception:
+        pass
+
+    # Also try reading from the task's artifacts / output
+    try:
+        # clearml stores scalar metrics in the task's event log
+        # Use the internal event reader as fallback
+        for title in ("Score", "Loss", "PDE", "Time"):
+            for series_key, value in _get_series_values(task, title).items():
+                scalars[f"{title}/{series_key}"] = value
+    except Exception:
+        pass
+
+    if not scalars:
+        return None
+    return scalars
+
+
+def _get_series_values(task: Any, title: str) -> dict[str, float]:
+    """Helper: extract scalar series for a given title from a clearml task.
+
+    Uses the internal _get_latest_scalar_values approach.
+    """
+    result: dict[str, float] = {}
+    try:
+        # Try the standard API approach
+        scalar_keys = task.get_last_scalar_series()
+        for key in scalar_keys or []:
+            if key.startswith(f"{title}/"):
+                series_name = key[len(title) + 1 :]
+                values = task.get_scalar_reported_series(key)
+                if values:
+                    result[series_name] = values[-1].get("value", 0.0)
+    except Exception:
+        pass
+    return result
+
+
 def enqueue_task(task_id: str, queue_name: str = "default") -> dict[str, Any]:
     """Enqueue a task to a clearml queue.
 
