@@ -16,99 +16,62 @@ Usage:
 
 from typing import Any
 
+import os
+
 from expflow_pde.equations import (
     get_equation,
     get_equations,
     list_equations_for_task,
 )
 
-# ── Task metadata ──
+# ── Task metadata — loaded from external YAML ──
 
-_TASK_META: dict[str, dict[str, Any]] = {
-    "task1": {
-        "label": "Task 1 — Burgers (fixed nu=0.001)",
-        "max_score": 150,
-        "difficulty": "medium",
-        "priority": "high",
-        "status": "in_progress",
-        "current_best_seg": 57.09,
-        "current_best_total": 142,
-        "estimated_ceiling": 150,
-        "remaining_headroom": 8,
-        "key_bottlenecks": [
-            "Seg3 long-horizon stability (190-step AR rollout)",
-            "IC distribution mismatch between train/val",
-            "Training time <60min to get full 35/35 time score",
-        ],
-        "proven_strategies": [
-            "sub_step=5: +11.37 Seg (dt mismatch fix)",
-            "Stability FT (rollout_stability_penalty): +23.45 Seg",
-            "P2 architecture (16/32, 50K params): optimal size",
-            "FT lr≈1e-7: preserves pretrained features",
-        ],
-        "next_steps": [
-            "HPO on lambda_stab (0.0001-0.01) for stability penalty",
-            "Stability FT more epochs (20-30) for higher Seg",
-            "P3 (24/32) baseline + sub_step=5 + stability FT",
-        ],
-    },
-    "task2": {
-        "label": "Task 2 — Burgers (multi-nu generalization)",
-        "max_score": 150,
-        "difficulty": "hard",
-        "priority": "low",
-        "status": "not_started",
-        "current_best_seg": None,
-        "current_best_total": None,
-        "estimated_ceiling": 130,
-        "remaining_headroom": 130,
-        "key_bottlenecks": [
-            "Multi-nu generalization: nu not provided at inference",
-            "Must train from scratch (no pretrained checkpoints)",
-            "Different IC distributions across nu values",
-        ],
-        "proven_strategies": [
-            "nu-conditional FNO: embed nu as additional input channel",
-            "Multi-decoder or adaptive normalization per nu",
-            "Meta-learning across nu: MAML or Reptile",
-        ],
-        "next_steps": [
-            "Investigate nu-conditional input encoding",
-            "Run baseline FNO on multi-nu training set",
-            "Evaluate generalization gap across nu range",
-        ],
-    },
-    "task3": {
-        "label": "Task 3 — Kuramoto-Sivashinsky (bonus, chaotic)",
-        "max_score": 350,
-        "difficulty": "very_hard",
-        "priority": "medium",
-        "status": "not_started",
-        "current_best_seg": None,
-        "current_best_total": None,
-        "estimated_ceiling": 250,
-        "remaining_headroom": 250,
-        "key_bottlenecks": [
-            "Chaotic dynamics: exponential error growth",
-            "400-step total trajectory, 380-step prediction",
-            "lambda_2 not provided at inference",
-            "Must train from scratch (no pretrained checkpoints)",
-            "Only 2100 total samples (2000 train)",
-        ],
-        "proven_strategies": [
-            "Pseudo-spectral / ETD numerical solver as reference",
-            "FNO with spectral normalization for chaotic stability",
-            "lambda_2 inference head: estimate lambda from 20-step window",
-            "Stability FT directly applicable (步间方差惩罚)",
-        ],
-        "next_steps": [
-            "Download task3 data (800MB)",
-            "Run baseline FNO on KS training set",
-            "Evaluate lambda_2 inference accuracy",
-            "Benchmark: 20-step observation → parameter guess",
-        ],
-    },
-}
+_TASK_META_YAML: str | None = None
+
+
+def _get_task_meta_path() -> str:
+    if _TASK_META_YAML is not None:
+        return _TASK_META_YAML
+    home = os.environ.get("EXPFLOW_HOME", os.path.expanduser("~/.expflow"))
+    return os.path.join(home, "task_meta.yaml")
+
+
+def _load_task_meta() -> dict[str, dict[str, Any]]:
+    path = _get_task_meta_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        import yaml
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def update_task_meta(task_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    path = _get_task_meta_path()
+    meta = _load_task_meta()
+    if task_id not in meta:
+        meta[task_id] = {}
+    meta[task_id].update(updates)
+    try:
+        import yaml
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            yaml.safe_dump(meta, f, default_flow_style=False, allow_unicode=True)
+    except Exception as e:
+        raise RuntimeError(f"Failed to persist task metadata: {e}") from e
+    return dict(meta[task_id])
+
+
+def get_task_meta(task_id: str | None = None) -> dict[str, Any] | dict[str, dict[str, Any]]:
+    meta = _load_task_meta()
+    if task_id is not None:
+        return meta.get(task_id, {})
+    return meta
 
 
 # ── Public API ──
@@ -121,7 +84,7 @@ def list_task_summaries() -> list[dict[str, Any]]:
         List of task summary dicts, one per competition task.
     """
     result: list[dict[str, Any]] = []
-    for task_id, meta in sorted(_TASK_META.items()):
+    for task_id, meta in sorted((get_task_meta() or {}).items()):
         eqs = list_equations_for_task(task_id)
         eq_names = [e.get("name", "?") for e in eqs]
         dims = [e.get("dim", "?") for e in eqs]
@@ -156,8 +119,8 @@ def analyze_task(task_id: str) -> dict[str, Any] | None:
     Returns:
         Detailed analysis dict with equations, scoring, strategies, or None.
     """
-    meta = _TASK_META.get(task_id)
-    if meta is None:
+    meta = get_task_meta(task_id)
+    if not meta:
         return None
 
     eqs = list_equations_for_task(task_id)
@@ -264,9 +227,9 @@ def get_strategic_recommendation() -> dict[str, Any]:
     """
     # Determine focus
     # Task 1 is near ceiling (~142/150), Task 2 and 3 have high headroom
-    t1 = _TASK_META["task1"]
-    t2 = _TASK_META["task2"]
-    t3 = _TASK_META["task3"]
+    t1 = get_task_meta("task1")
+    t2 = get_task_meta("task2")
+    t3 = get_task_meta("task3")
 
     remaining_days = 8  # competition ends 2026-05-27, today is 2026-05-19
 
@@ -316,7 +279,7 @@ def get_equation_analysis(equation_name: str) -> dict[str, Any] | None:
 
     # Find which tasks use this equation
     assigned_tasks: list[str] = []
-    for task_id, eq_names in _TASK_META.items():
+    for task_id, eq_names in get_task_meta().items():
         task_eqs = list_equations_for_task(task_id)
         if any(e.get("name") == equation_name for e in task_eqs):
             assigned_tasks.append(task_id)

@@ -4,6 +4,7 @@
 
 from typing import Optional
 
+import json
 import typer
 
 analyze_app = typer.Typer(
@@ -406,3 +407,50 @@ def suggest_cmd(
     print(f"\n  Rationale:")
     for r in rationale:
         print(f"    - {r}")
+
+
+@analyze_app.command("deep")
+def deep_cmd(
+    task_id: str = typer.Argument(..., help="ClearML task ID"),
+    wiki: bool = typer.Option(True, "--wiki/--no-wiki",
+        help="Include wiki context in analysis"),
+) -> None:
+    """Deep analysis with reasoning model (requires deepseek-v4-pro).
+
+    Runs the rule engine first (diagnose), then reads wiki context
+    and experiment history to provide a comprehensive analysis.
+
+    Uses the 'model.analysis' config from ~/.hermes/config.yaml.
+    """
+    from expflow_pde.analyze import diagnose_experiment, get_task_meta
+
+    # Step 1: Rule engine (0 token)
+    print(f"  [1/3] Rule engine diagnosis...")
+    diagnosis = diagnose_experiment(task_id=task_id)
+    if diagnosis is None:
+        print(f"  Cannot load experiment: {task_id}")
+        raise typer.Exit(code=1)
+
+    print(f"    Pattern: {diagnosis['degradation_pattern']}")
+    for d in diagnosis['diagnosis']:
+        print(f"    - {d}")
+
+    # Step 2: Context
+    print(f"\n  [2/3] Loading context...")
+    task_meta = get_task_meta()
+
+    # Print what would be included in deep analysis
+    print(f"    Task metadata loaded: {list(task_meta.keys())}")
+    print(f"    Wiki pages available: ~/wiki/entities/, ~/wiki/concepts/")
+
+    # Step 3: Instruction for the reasoning model
+    print(f"\n  [3/3] Deep analysis prompt (ready for deepseek-v4-pro):")
+    print(f"    {'=' * 55}")
+    print(f"    Analyze experiment {task_id} with reasoning:")
+    print(f"    - Seg scores: {diagnosis.get('seg1')}, {diagnosis.get('seg2')}, "
+          f"{diagnosis.get('seg3')}")
+    print(f"    - Pattern: {diagnosis['degradation_pattern']}")
+    print(f"    - Current task knowledge: {json.dumps(task_meta.get('task1', {}).get('proven_strategies', []), indent=2)}")
+    print(f"    {'=' * 55}")
+    print(f"\n  To run with deepseek-v4-pro:")
+    print(f"    hermes \"Deep analysis of experiment {task_id}\"")
