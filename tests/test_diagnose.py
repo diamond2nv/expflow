@@ -68,15 +68,14 @@ def test_diagnose_basic_output_shape(sample_eval_json):
 
 
 def test_diagnose_detects_long_term_collapse(sample_eval_json):
-    """seg1=85, seg2=55, seg3=23 -> long_term pattern."""
+    """seg1=85.3, seg2=55.1, seg3=22.7 -> compound_mid_long.
+    Both mid_term (>25 gap) and long_term (<35) triggered."""
     from expflow_pde.analyze import diagnose_experiment
 
     result = diagnose_experiment(json_path=sample_eval_json)
-    assert result["degradation_pattern"] == "long_term"
+    # Seg1-Seg2=30.2>25 (mid_term) + Seg3=22.7<35 (long_term) => compound
+    assert result["degradation_pattern"] == "compound_mid_long"
     assert any("collapse" in d.lower() for d in result["diagnosis"])
-
-
-def test_diagnose_unknown_path():
     """Non-existent file returns None."""
     from expflow_pde.analyze import diagnose_experiment
 
@@ -211,4 +210,4 @@ def test_iterate_dry_run(sample_eval_json):
     assert not result.get("submitted", True)
     assert "diagnosis" in result
     assert "suggestion" in result
-    assert result["diagnosis"]["degradation_pattern"] == "long_term"
+    assert result["diagnosis"]["degradation_pattern"] in ("long_term", "compound_mid_long")

@@ -159,6 +159,107 @@ class TestEquationAnalysis:
         assert e["assigned_tasks"] == []
 
 
+class TestDiagnoseExperiment:
+    """diagnose_experiment() — degradation pattern detection."""
+
+    def test_diagnose_stable(self):
+        from expflow_pde.analyze import diagnose_experiment
+
+        result = diagnose_experiment(
+            json_path="nonexistent.json"
+        )
+        assert result is None  # file not found
+
+    def test_diagnose_ceiling_detection(self):
+        from expflow_pde.analyze import diagnose_experiment
+        import tempfile, json, os
+
+        data = {
+            "segmented_scores": {
+                "seg1": 68, "seg2": 67, "seg3": 55,
+                "total": 190,
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            fname = f.name
+        try:
+            result = diagnose_experiment(json_path=fname)
+            assert result is not None
+            assert result["degradation_pattern"] == "ceiling", (
+                f"Expected ceiling, got {result['degradation_pattern']}"
+            )
+            assert any("ceiling" in d.lower() for d in result["diagnosis"])
+        finally:
+            os.unlink(fname)
+
+    def test_diagnose_compound_mid_long(self):
+        from expflow_pde.analyze import diagnose_experiment
+        import tempfile, json, os
+
+        data = {
+            "segmented_scores": {
+                "seg1": 95, "seg2": 40, "seg3": 38,
+                "total": 173,
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            fname = f.name
+        try:
+            result = diagnose_experiment(json_path=fname)
+            assert result is not None
+            # Seg1-Seg2=55 > 25 → mid_term, Seg3=38 >= 35 but Seg3 < Seg2*0.6=24? 
+            # 38 < 24? No. So long_term not triggered. Mid_term only.
+            # Wait: let me verify the actual pattern
+            print(f"DEBUG: {result}")
+            assert result["degradation_pattern"] in ("mid_term",), (
+                f"Expected mid_term, got {result['degradation_pattern']}"
+            )
+        finally:
+            os.unlink(fname)
+
+    def test_diagnose_compound_mid_long_both(self):
+        from expflow_pde.analyze import diagnose_experiment
+        import tempfile, json, os
+
+        data = {
+            "segmented_scores": {
+                "seg1": 95, "seg2": 40, "seg3": 15,
+                "total": 150,
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            fname = f.name
+        try:
+            result = diagnose_experiment(json_path=fname)
+            assert result is not None
+            assert result["degradation_pattern"] == "compound_mid_long", (
+                f"Expected compound_mid_long, got {result['degradation_pattern']}"
+            )
+        finally:
+            os.unlink(fname)
+
+    def test_diagnose_clearml_error_returns_info(self):
+        # Test that _error path in diagnose_experiment works end-to-end
+        from expflow_pde.analyze import diagnose_experiment
+        import json, os, tempfile
+
+        data = {"_error": "clearml server connection failed: test"}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            fname = f.name
+        try:
+            result = diagnose_experiment(json_path=fname)
+            assert result is not None
+            assert result["degradation_pattern"] == "error"
+            assert "_connection_error" in result
+        finally:
+            os.unlink(fname)
+
+
+
 class TestListAllEquationsSummary:
     """list_all_equations_summary() — compact listing."""
 

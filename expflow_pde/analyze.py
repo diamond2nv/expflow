@@ -352,8 +352,11 @@ def _load_experiment_metrics(
     """Load experiment metrics from clearml task or local JSON.
 
     Supports two input sources:
-    - json_path: local eval_task1_*.json file (for unit tests / offline use)
+    - json_path: local eval JSON file (for unit tests / offline use)
     - task_id: clearml task ID (fetches metrics from clearml server)
+
+    Returns a dict with metrics on success, a dict with _error key on
+    clearml connection failure, or None if no input source provided.
     """
     import json
     import os
@@ -368,9 +371,21 @@ def _load_experiment_metrics(
         try:
             from expflow_pde.clearml import get_task_scalars
 
-            return get_task_scalars(task_id)
-        except Exception:
-            return None
+            result = get_task_scalars(task_id)
+            if result is None:
+                return {
+                    "_error": (
+                        f"clearml task {task_id} returned no scalars: "
+                        "task may not exist or have no reported data"
+                    )
+                }
+            return result
+        except ImportError:
+            return {"_error": "clearml SDK not installed — cannot fetch task scalars"}
+        except ConnectionError as e:
+            return {"_error": f"clearml server connection failed: {e}"}
+        except Exception as e:
+            return {"_error": f"clearml error for task {task_id}: {e}"}
 
     return None
 
@@ -396,6 +411,19 @@ def diagnose_experiment(
     if metrics is None:
         return None
 
+    # Check for clearml connection error
+    if "_error" in metrics:
+        return {
+            "seg1": 0.0,
+            "seg2": 0.0,
+            "seg3": 0.0,
+            "total": 0.0,
+            "total_mse": 0.0,
+            "diagnosis": [f"CLEARML_ERROR: {metrics['_error']}"],
+            "degradation_pattern": "error",
+            "_connection_error": metrics["_error"],
+        }
+
     # Extract seg scores — handles both flat and nested JSON shapes
     seg = metrics.get("segmented_scores", metrics)
     if isinstance(seg, dict):
@@ -416,46 +444,75 @@ def diagnose_experiment(
     if not isinstance(total_mse, (int, float)):
         total_mse = 0.0
 
-    # Diagnosis rules
+    # ── Diagnosis rules (v2: composite + ceiling-aware) ──
     diagnosis: list[str] = []
     degradation_pattern = "stable"
 
-    if isinstance(seg1, (int, float)) and seg1 < 70:
+    # Normalize types
+    s1 = float(seg1) if isinstance(seg1, (int, float)) else 0.0
+    s2 = float(seg2) if isinstance(seg2, (int, float)) else 0.0
+    s3 = float(seg3) if isinstance(seg3, (int, float)) else 0.0
+    mse = float(total_mse) if isinstance(total_mse, (int, float)) else 0.0
+
+    # Detect ceiling: Seg1 < 70 but Seg2 is close and Seg3 not collapsing
+    is_ceiling = (
+        s1 < 70 and s2 > 0 and s3 > 0
+        and (s1 - s2) < 10
+        and s3 > s2 * 0.7
+    )
+    is_short_term = s1 < 70 and not is_ceiling
+
+    if is_ceiling:
+        diagnosis.append(
+            "Score ceiling — Seg uniformly low but stable "
+            "(model capacity or data limit)"
+        )
+        degradation_pattern = "ceiling"
+
+    elif is_short_term:
         diagnosis.append("Short-term prediction is weak (Seg1 low)")
         degradation_pattern = "short_term"
 
-    if (
-        isinstance(seg1, (int, float))
-        and seg1 > 0
-        and isinstance(seg2, (int, float))
-        and seg2 > 0
-        and (seg1 - seg2) > 25
-    ):
+    # Medium-term — detect independently (not mutually exclusive)
+    mid_term_detected = (
+        s1 > 0 and s2 > 0 and (s1 - s2) > 25
+    )
+    if mid_term_detected:
         diagnosis.append("Medium-term stability degraded (Seg2 drops >25 from Seg1)")
+
+    # Long-term — detect independently
+    long_term_detected = (
+        s3 < 35 or (s2 > 0 and s3 < s2 * 0.6)
+    )
+    if long_term_detected:
+        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
+
+    # Resolve composite pattern
+    if is_ceiling:
+        # Ceiling takes priority — mid/long_term are artifacts of plateau
+        pass
+    elif is_short_term:
+        # Short-term takes priority — mid/long_term are secondary effects
+        pass
+    elif mid_term_detected and long_term_detected:
+        degradation_pattern = "compound_mid_long"
+    elif long_term_detected:
+        degradation_pattern = "long_term"
+    elif mid_term_detected:
         if degradation_pattern == "stable":
             degradation_pattern = "mid_term"
 
-    if isinstance(seg3, (int, float)) and (
-        seg3 < 35
-        or (
-            isinstance(seg2, (int, float))
-            and seg2 > 0
-            and seg3 < seg2 * 0.6
-        )
-    ):
-        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
-        degradation_pattern = "long_term"
-
+    # Distribution shift (independent check)
     if (
-        all(isinstance(s, (int, float)) and s > 0 for s in [seg1, seg2, seg3])
-        and max(seg1, seg2, seg3) < 40
-        and isinstance(total_mse, (int, float))
-        and total_mse < 0.1
+        s1 > 0 and s2 > 0 and s3 > 0
+        and max(s1, s2, s3) < 40
+        and mse < 0.1
     ):
         diagnosis.append(
             "Consistent underperformance — possible IC distribution mismatch"
         )
-        degradation_pattern = "distribution_shift"
+        if degradation_pattern == "stable":
+            degradation_pattern = "distribution_shift"
 
     if not diagnosis:
         diagnosis.append("No critical degradation detected")
@@ -500,7 +557,7 @@ def suggest_next_params(
     suggestions: dict = {}
     rationale: list[str] = []
 
-    if pattern == "long_term" or (
+    if pattern == "long_term" or pattern == "compound_mid_long" or (
         isinstance(seg3, (int, float))
         and seg3 < 30
         and isinstance(seg1, (int, float))
@@ -533,6 +590,24 @@ def suggest_next_params(
                 "Seg2 drop: add step-wise stability penalty "
                 "(stability_lambda=0.001)"
             )
+
+    elif pattern == "ceiling":
+        current_modes = int(hp.get("n_modes", 12))
+        current_width = int(hp.get("width", 32))
+        suggestions["n_modes"] = min(current_modes + 4, 24)
+        suggestions["width"] = min(current_width + 16, 64)
+        suggestions["epochs"] = max(int(hp.get("epochs", 80)), 120)
+        suggestions["tag"] = "auto_ceiling_fix"
+        rationale.append(
+            f"Score ceiling detected: increase model capacity "
+            f"(n_modes {current_modes}->{suggestions['n_modes']}, "
+            f"width {current_width}->{suggestions['width']}) "
+            "to break through plateau"
+        )
+        rationale.append(
+            "Ceiling may also indicate data-limited — consider "
+            "data augmentation if capacity increase doesn't help"
+        )
 
     elif pattern == "short_term":
         current_lr = float(hp.get("lr", 0.001))
