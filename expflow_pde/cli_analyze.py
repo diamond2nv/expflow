@@ -338,3 +338,71 @@ def losses_cmd(
     print()
     print("  Details: expflow analyze losses <name>")
     print("  Usage:   expflow optuna run script.py --loss l2_rel")
+
+
+@analyze_app.command("diagnose")
+def diagnose_cmd(
+    task_id: str | None = typer.Option(None, "--task", "-t",
+        help="ClearML task ID"),
+    json_path: str | None = typer.Option(None, "--json", "-j",
+        help="Path to local eval JSON file"),
+) -> None:
+    """Analyze experiment and identify degradation patterns."""
+    if not task_id and not json_path:
+        print("ERROR: Provide --task <id> or --json <path>")
+        raise typer.Exit(code=1)
+
+    from expflow_pde.analyze import diagnose_experiment
+
+    result = diagnose_experiment(task_id=task_id, json_path=json_path)
+    if result is None:
+        src = f"task_id={task_id}" if task_id else f"json={json_path}"
+        print(f"Cannot load experiment ({src})")
+        raise typer.Exit(code=1)
+
+    print(f"  Seg1: {result['seg1']:>6.2f}  | Seg2: {result['seg2']:>6.2f}  "
+          f"| Seg3: {result['seg3']:>6.2f}  | Total: {result['total']:>6.2f}")
+    print(f"  MSE:  {result['total_mse']:.6f}")
+    print(f"  Pattern: {result['degradation_pattern']}")
+    print(f"  Diagnosis:")
+    for d in result['diagnosis']:
+        print(f"    - {d}")
+
+
+@analyze_app.command("suggest")
+def suggest_cmd(
+    task_id: str | None = typer.Option(None, "--task", "-t",
+        help="ClearML task ID"),
+    json_path: str | None = typer.Option(None, "--json", "-j",
+        help="Path to eval JSON file"),
+) -> None:
+    """Analyze experiment and suggest next hyperparameters."""
+    from expflow_pde.analyze import diagnose_experiment, suggest_next_params
+
+    hp: dict = {}
+
+    diagnosis = diagnose_experiment(task_id=task_id, json_path=json_path)
+    if diagnosis is None:
+        src = f"task_id={task_id}" if task_id else f"json={json_path}"
+        print(f"Cannot load experiment ({src})")
+        raise typer.Exit(code=1)
+
+    suggestion = suggest_next_params(diagnosis, current_hparams=hp)
+
+    print(f"\n  Diagnosis:")
+    print(f"    Pattern: {diagnosis['degradation_pattern']}")
+    for d in diagnosis['diagnosis']:
+        print(f"    - {d}")
+
+    params = suggestion.get("suggested_params", {})
+    rationale = suggestion.get("rationale", [])
+
+    print(f"\n  Suggested params:")
+    for k, v in params.items():
+        if k == "tag":
+            continue
+        print(f"    --{k}={v}")
+
+    print(f"\n  Rationale:")
+    for r in rationale:
+        print(f"    - {r}")

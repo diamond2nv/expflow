@@ -377,3 +377,219 @@ def list_all_equations_summary() -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+# ── Diagnosis Engine ──
+
+
+def _load_experiment_metrics(
+    task_id: str | None = None,
+    json_path: str | None = None,
+) -> dict | None:
+    """Load experiment metrics from clearml task or local JSON.
+
+    Supports two input sources:
+    - json_path: local eval_task1_*.json file (for unit tests / offline use)
+    - task_id: clearml task ID (fetches metrics from clearml server)
+    """
+    import json
+    import os
+
+    if json_path:
+        if not os.path.exists(json_path):
+            return None
+        with open(json_path) as f:
+            return json.load(f)
+
+    if task_id:
+        try:
+            from expflow_pde.clearml import get_task_scalars
+
+            return get_task_scalars(task_id)
+        except Exception:
+            return None
+
+    return None
+
+
+def diagnose_experiment(
+    task_id: str | None = None,
+    json_path: str | None = None,
+) -> dict | None:
+    """Analyze experiment results and identify degradation patterns.
+
+    Reads metrics from a clearml task or local eval JSON, then applies
+    rule-based diagnosis to classify degradation mode.
+
+    Args:
+        task_id: ClearML task ID (alternative to json_path).
+        json_path: Path to local eval JSON file (alternative to task_id).
+
+    Returns:
+        Dict with seg scores, diagnosis list, and degradation pattern string.
+        Returns None if metrics cannot be loaded.
+    """
+    metrics = _load_experiment_metrics(task_id, json_path)
+    if metrics is None:
+        return None
+
+    # Extract seg scores — handles both flat and nested JSON shapes
+    seg = metrics.get("segmented_scores", metrics)
+    if isinstance(seg, dict):
+        seg1 = seg.get("seg1_score", seg.get("seg1", seg.get("Seg1", 0)))
+        seg2 = seg.get("seg2_score", seg.get("seg2", seg.get("Seg2", 0)))
+        seg3 = seg.get("seg3_score", seg.get("seg3", seg.get("Seg3", 0)))
+        total = seg.get(
+            "total_segmented_score", seg.get("total", seg.get("Total", 0))
+        )
+    else:
+        seg1 = seg2 = seg3 = total = 0
+
+    # Extract total_mse from possibly nested results dict
+    results = metrics.get("results", {})
+    total_mse = results.get(
+        "total_mse", metrics.get("total_mse", metrics.get("Total MSE", 0))
+    )
+    if not isinstance(total_mse, (int, float)):
+        total_mse = 0.0
+
+    # Diagnosis rules
+    diagnosis: list[str] = []
+    degradation_pattern = "stable"
+
+    if isinstance(seg1, (int, float)) and seg1 < 70:
+        diagnosis.append("Short-term prediction is weak (Seg1 low)")
+        degradation_pattern = "short_term"
+
+    if (
+        isinstance(seg1, (int, float))
+        and seg1 > 0
+        and isinstance(seg2, (int, float))
+        and seg2 > 0
+        and (seg1 - seg2) > 25
+    ):
+        diagnosis.append("Medium-term stability degraded (Seg2 drops >25 from Seg1)")
+        if degradation_pattern == "stable":
+            degradation_pattern = "mid_term"
+
+    if isinstance(seg3, (int, float)) and (
+        seg3 < 35
+        or (
+            isinstance(seg2, (int, float))
+            and seg2 > 0
+            and seg3 < seg2 * 0.6
+        )
+    ):
+        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
+        degradation_pattern = "long_term"
+
+    if (
+        all(isinstance(s, (int, float)) and s > 0 for s in [seg1, seg2, seg3])
+        and max(seg1, seg2, seg3) < 40
+        and isinstance(total_mse, (int, float))
+        and total_mse < 0.1
+    ):
+        diagnosis.append(
+            "Consistent underperformance — possible IC distribution mismatch"
+        )
+        degradation_pattern = "distribution_shift"
+
+    if not diagnosis:
+        diagnosis.append("No critical degradation detected")
+
+    return {
+        "seg1": round(float(seg1), 2) if isinstance(seg1, (int, float)) else 0,
+        "seg2": round(float(seg2), 2) if isinstance(seg2, (int, float)) else 0,
+        "seg3": round(float(seg3), 2) if isinstance(seg3, (int, float)) else 0,
+        "total": round(float(total), 2) if isinstance(total, (int, float)) else 0,
+        "total_mse": (
+            round(float(total_mse), 6) if isinstance(total_mse, (int, float)) else 0
+        ),
+        "diagnosis": diagnosis,
+        "degradation_pattern": degradation_pattern,
+    }
+
+
+def suggest_next_params(
+    diagnosis: dict,
+    current_hparams: dict | None = None,
+    task_id: str = "task1",
+) -> dict:
+    """Suggest next experiment parameters based on diagnosis.
+
+    Uses rule-based suggestions derived from proven strategies
+    (sub_step, stability FT, HyperNOs best practices).
+    Zero token cost — deterministic rules only.
+
+    Args:
+        diagnosis: Output from diagnose_experiment().
+        current_hparams: Current experiment's hyperparameters.
+        task_id: Competition task ID (for context).
+
+    Returns:
+        Dict with suggested_params, rationale list.
+    """
+    pattern = diagnosis.get("degradation_pattern", "stable")
+    seg1 = diagnosis.get("seg1", 0)
+    seg3 = diagnosis.get("seg3", 0)
+
+    hp = dict(current_hparams) if current_hparams else {}
+    suggestions: dict = {}
+    rationale: list[str] = []
+
+    if pattern == "long_term" or (
+        isinstance(seg3, (int, float))
+        and seg3 < 30
+        and isinstance(seg1, (int, float))
+        and seg1 > 60
+    ):
+        current_modes = int(hp.get("n_modes", 12))
+        suggestions["n_modes"] = min(current_modes + 4, 24)
+        suggestions["num_sub_steps"] = 5
+        suggestions["tag"] = "auto_seg3_fix"
+        rationale.append(
+            f"Seg3 collapse ({seg3:.1f}): Increase n_modes "
+            f"{current_modes}->{suggestions['n_modes']} "
+            "to capture more spatial frequencies"
+        )
+        rationale.append(
+            "Add sub_step=5 to fix dt mismatch between "
+            "training (0.01) and inference (0.05)"
+        )
+        if not hp.get("weight_decay"):
+            suggestions["weight_decay"] = 1e-4
+            rationale.append(
+                "Add weight_decay=1e-4 (HyperNOs Burgers best practice)"
+            )
+
+    elif pattern == "mid_term":
+        suggestions["tag"] = "auto_mid_fix"
+        if "stability_lambda" not in hp or not hp.get("stability_lambda"):
+            suggestions["stability_lambda"] = 0.001
+            rationale.append(
+                "Seg2 drop: add step-wise stability penalty "
+                "(stability_lambda=0.001)"
+            )
+
+    elif pattern == "short_term":
+        current_lr = float(hp.get("lr", 0.001))
+        suggestions["lr"] = min(current_lr * 2, 0.005)
+        suggestions["epochs"] = max(int(hp.get("epochs", 80)), 100)
+        suggestions["tag"] = "auto_short_fix"
+        rationale.append(
+            f"Seg1 low ({seg1:.1f}): increase LR "
+            f"{current_lr}->{suggestions['lr']} and extend training"
+        )
+
+    else:
+        suggestions["tag"] = "auto_hpo_round"
+        rationale.append(
+            "Experiment stable. Run targeted HPO on remaining strategies."
+        )
+
+    return {
+        "suggested_params": suggestions,
+        "rationale": rationale,
+        "task_id": task_id,
+        "degradation_pattern": pattern,
+    }

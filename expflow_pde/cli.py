@@ -174,6 +174,23 @@ _ = _lazy_register_pin()
 _ = _lazy_register_analyze()
 _ = _lazy_register_pipeline()
 
+
+def _lazy_register_iterate():
+    from expflow_pde.cli_iterate import iterate_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "iterate":
+            return iterate_app
+    app.add_typer(
+        iterate_app,
+        name="iterate",
+        help="One-shot experiment iteration: diagnose -> suggest -> submit",
+    )
+    return iterate_app
+
+
+_ = _lazy_register_iterate()
+
 # ── Top-level commands ──
 
 
