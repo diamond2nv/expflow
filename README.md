@@ -6,7 +6,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/expflow-pde)](https://pypi.org/project/expflow-pde/)
 [![Python versions](https://img.shields.io/pypi/pyversions/expflow-pde)](https://pypi.org/project/expflow-pde/)
-[![License](https://img.shields.io/github/license/diamond2nv/expflow)](https://github.com/diamond2nv/expflow/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/diamond2nv/expflow)](https://github.com/diamond2nv/expflow/blob/master/LICENSE)
 
 **Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci.**
 
