@@ -183,22 +183,105 @@ def _get_score_composition(task_id: str) -> dict[str, Any] | None:
     return None
 
 
-def estimate_score_potential(task_id: str) -> dict[str, Any]:
+def _compute_convergence_estimate(
+    seg_history: list[float],
+) -> dict[str, Any]:
+    """Given ordered Seg total history [s0, s1, ..., sn], estimate ceiling.
+
+    Uses exponential decay of incremental gains to project asymptotic limit.
+    Low-gain-decay (near 1.0 = diminishing returns) means near ceiling.
+
+    Args:
+        seg_history: Ordered list of Seg totals from most recent experiments.
+
+    Returns:
+        Dict with optimistic, expected, conservative, confidence, gain_decay.
+    """
+    if not seg_history:
+        return {
+            "optimistic": 0,
+            "expected": 0,
+            "conservative": 0,
+            "confidence": "none",
+            "gain_decay": 1.0,
+            "seg_history": [],
+        }
+
+    if len(seg_history) < 3:
+        return {
+            "optimistic": round(seg_history[-1] + 5, 1),
+            "expected": round(seg_history[-1] + 2, 1),
+            "conservative": round(seg_history[-1], 1),
+            "confidence": "low",
+            "gain_decay": 0.5,
+            "seg_history": seg_history,
+        }
+
+    # Compute incremental gains
+    gains = [seg_history[i + 1] - seg_history[i] for i in range(len(seg_history) - 1)]
+
+    # Estimate gain decay ratio from the last few steps
+    gain_decay = 0.5  # default halving
+    if len(gains) >= 2:
+        decay_ratios = [
+            gains[i + 1] / max(1e-8, gains[i]) for i in range(len(gains) - 1)
+        ]
+        # Take minimum to avoid overly optimistic projections
+        gain_decay = min(decay_ratios)
+
+    last_gain = gains[-1]
+    # Asymptotic series: last_gain * (1 + r + r^2 + ...) = last_gain / (1 - r)
+    asymptotic_gain = last_gain / max(1.0 - gain_decay, 0.1)
+    projected = round(seg_history[-1] + asymptotic_gain, 1)
+
+    # Confidence based on stability of decline
+    if len(gains) >= 3:
+        stable = all(
+            0.3 <= gains[i + 1] / max(1e-8, gains[i]) <= 2.0
+            for i in range(len(gains) - 1)
+        )
+        conf: str = "high" if stable else "medium"
+    else:
+        conf = "medium"
+
+    return {
+        "optimistic": round(projected + 1, 1),
+        "expected": projected,
+        "conservative": round(max(projected - 2, seg_history[-1]), 1),
+        "confidence": conf,
+        "gain_decay": round(gain_decay, 3),
+        "seg_history": seg_history,
+    }
+
+
+def estimate_score_potential(
+    task_id: str,
+    seg_history: list[float] | None = None,
+) -> dict[str, Any]:
     """Estimate best-case and expected score for a task given current knowledge.
+
+    If seg_history is provided, uses data-driven convergence estimation.
+    Otherwise falls back to hardcoded expert estimates.
 
     Args:
         task_id: 'task1', 'task2', or 'task3'.
+        seg_history: Optional ordered list of Seg totals for data-driven estimate.
 
     Returns:
         Dict with optimistic, expected, conservative estimates.
     """
+    if seg_history and len(seg_history) >= 1:
+        return _compute_convergence_estimate(seg_history)
+
+    # Fallback: hardcoded expert estimates (used when no history available)
     if task_id == "task1":
         return {
             "optimistic": 148,
             "expected": 145,
             "conservative": 140,
             "confidence": "high",
-            "note": "Seg ~60-65 achievable with more epochs; main risk is training time",
+            "note": "Hardcoded estimate (no seg_history provided). "
+            "Seg ~60-65 achievable with more epochs.",
         }
     elif task_id == "task2":
         return {
@@ -206,7 +289,8 @@ def estimate_score_potential(task_id: str) -> dict[str, Any]:
             "expected": 90,
             "conservative": 60,
             "confidence": "low",
-            "note": "Difficulty depends on nu generalization gap — needs baseline evaluation",
+            "note": "Hardcoded estimate (no seg_history provided). "
+            "Nu generalization gap unknown.",
         }
     elif task_id == "task3":
         return {
@@ -214,7 +298,8 @@ def estimate_score_potential(task_id: str) -> dict[str, Any]:
             "expected": 150,
             "conservative": 100,
             "confidence": "low",
-            "note": "Chaotic KS is fundamentally harder; stability FT helps but unknown scaling",
+            "note": "Hardcoded estimate (no seg_history provided). "
+            "Chaotic KS is fundamentally harder.",
         }
     return {"optimistic": 0, "expected": 0, "conservative": 0, "confidence": "none"}
 
@@ -222,34 +307,132 @@ def estimate_score_potential(task_id: str) -> dict[str, Any]:
 def get_strategic_recommendation() -> dict[str, Any]:
     """Get overall strategic recommendation across all tasks.
 
+    Adjusts strategy based on remaining days before deadline.
+    - T+<=2: Sprint mode -- focus on highest-scored task, no new starts.
+    - T+<=5: Mid-range -- start secondary tasks only if primary is stable.
+    - T+>5: Normal mode -- full exploration.
+
     Returns:
         Dict with recommended focus, schedule, and reasoning.
     """
-    # Determine focus
-    # Task 1 is near ceiling (~142/150), Task 2 and 3 have high headroom
+    from datetime import date
+
     t1 = get_task_meta("task1")
     t2 = get_task_meta("task2")
     t3 = get_task_meta("task3")
 
-    remaining_days = 8  # competition ends 2026-05-27, today is 2026-05-19
+    deadline = date(2026, 5, 27)
+    today = date.today()
+    remaining_days = (deadline - today).days
+    if remaining_days < 0:
+        remaining_days = 0
 
+    t1_total = t1.get("current_best_total") or 0
+    t1_max = t1.get("max_score") or 150
+    t1_room = t1.get("remaining_headroom") or 0
+    t3_max = t3.get("max_score") or 350
+    t3_room = t3.get("remaining_headroom") or 0
+    t2_room = t2.get("remaining_headroom") or 0
+
+    # Sprint mode (<=2 days)
+    if remaining_days <= 2:
+        if t1_total >= 140:
+            return {
+                "primary_focus": "task3",
+                "primary_rationale": (
+                    f"Only {remaining_days} days left. Task 1 is at "
+                    f"{t1_total}/{t1_max} near ceiling. "
+                    "Invest remaining time in a Task 3 baseline run."
+                ),
+                "secondary_focus": "task1",
+                "secondary_rationale": (
+                    "Fine-tune Task 1 submission with current best config."
+                ),
+                "tertiary_focus": None,
+                "tertiary_rationale": (
+                    "Task 2 not viable: starting from scratch with "
+                    f"{remaining_days} days has near-zero success probability."
+                ),
+                "suggested_schedule": {
+                    "day_1": "Task 3: Run baseline FNO (data already downloaded)",
+                    "day_2": "Task 1: Final submission with best config",
+                },
+                "remaining_days": remaining_days,
+                "competition_deadline": "2026-05-27 14:00 UTC+8",
+                "submissions_per_day": 1,
+                "mode": "sprint",
+            }
+        else:
+            return {
+                "primary_focus": "task1",
+                "primary_rationale": (
+                    f"Only {remaining_days} days left. "
+                    f"Task 1 at {t1_total}/{t1_max} with {t1_room} pts "
+                    "remaining focus all remaining submissions here."
+                ),
+                "secondary_focus": None,
+                "secondary_rationale": (
+                    "No time to start Task 2 or 3 from scratch."
+                ),
+                "tertiary_focus": None,
+                "tertiary_rationale": "",
+                "suggested_schedule": {
+                    "day_1": "Task 1: Run final HPO sweep",
+                    "day_2": "Task 1: Best model submission",
+                },
+                "remaining_days": remaining_days,
+                "competition_deadline": "2026-05-27 14:00 UTC+8",
+                "submissions_per_day": 1,
+                "mode": "sprint",
+            }
+
+    # Mid-range mode (3-5 days)
+    if remaining_days <= 5:
+        return {
+            "primary_focus": "task1",
+            "primary_rationale": (
+                f"Task 1 at {t1_total}/{t1_max} with {t1_room} pts headroom. "
+                f"{remaining_days} days remaining final push."
+            ),
+            "secondary_focus": "task3",
+            "secondary_rationale": (
+                f"Task 3 has potential ({t3_room} pts headroom) but limited time. "
+                "Run baseline only no iterative optimization."
+            ),
+            "tertiary_focus": None,
+            "tertiary_rationale": (
+                f"Task 2 ({t2_room} pts headroom) effectively dead "
+                "insufficient time to train multi-nu from scratch."
+            ),
+            "suggested_schedule": {
+                "day_1_2": "Task 1: Final HPO on stability FT + longer epochs",
+                "day_3_4": "Task 3: Download data + baseline FNO evaluation",
+                "day_5": "Task 1: Final submission",
+            },
+            "remaining_days": remaining_days,
+            "competition_deadline": "2026-05-27 14:00 UTC+8",
+            "submissions_per_day": 1,
+            "mode": "mid_range",
+        }
+
+    # Normal mode (>5 days)
     return {
         "primary_focus": "task1",
         "primary_rationale": (
-            f"Task 1 is at ~{t1['current_best_total']}/{t1['max_score']} "
-            f"with {t1['remaining_headroom']} points headroom. "
-            "Seg improvement from 57→65 is achievable within 8 days."
+            f"Task 1 is at ~{t1_total}/{t1_max} "
+            f"with {t1_room} points headroom. "
+            "Seg improvement from current best is achievable."
         ),
         "secondary_focus": "task3",
         "secondary_rationale": (
-            f"Task 3 has {t3['remaining_headroom']} points potential at {t3['max_score']} max. "
-            "KS equation shares AR stability challenges with Task 1 — "
+            f"Task 3 has {t3_room} points potential at {t3_max} max. "
+            "KS equation shares AR stability challenges with Task 1 "
             "stability FT knowledge transfers directly."
         ),
         "tertiary_focus": "task2",
         "tertiary_rationale": (
-            f"Task 2 has high remaining headroom ({t2['remaining_headroom']}) "
-            "but requires generalizing across nu from scratch — "
+            f"Task 2 has high remaining headroom ({t2_room}) "
+            "but requires generalizing across nu from scratch "
             "highest risk with lowest confidence."
         ),
         "suggested_schedule": {
@@ -261,6 +444,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
         "remaining_days": remaining_days,
         "competition_deadline": "2026-05-27 14:00 UTC+8",
         "submissions_per_day": 1,
+        "mode": "normal",
     }
 
 
