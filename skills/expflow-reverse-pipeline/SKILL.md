@@ -41,6 +41,7 @@ Three-layer background task monitor for the reverse pipeline pattern:
 | **L1** | Cron PID polling | 15min | None (crontab) | Always-on |
 | **L2** | ZMQ PUB-SUB event | ~1ms | pyzmq | Optional |
 | **L3 (Goal)** | Hermes Agent /goal (built-in slash command) | Variable (judge-driven loop) | Hermes Agent | Active — see below |
+| **L4 (Iterate)** | `expflow analyze diagnose + suggest + iterate` | Instant | expflow CLI | New in v0.5.2 |
 
 > **Who this is for**: Researchers running experiments who want **automatic
 > notification + auto-analysis** when training finishes, with optional
@@ -66,11 +67,14 @@ expflow submit ─────┼──▶│ (cron)   │  │ (port 15556)│ 
                                     ┌────────┴────────┐
                                     │  Hermes Agent    │
                                     │  (goal engine)   │
+                                    └────────┬────────┘
+                                             │
+                                    ┌────────┴────────┐
+                                    │  expflow loop    │
+                                    │  diagnose →     │
+                                    │  suggest →      │
+                                    │  iterate submit  │
                                     └─────────────────┘
-                                        │         │
-                                        ▼         ▼
-                                  expflow     hfpclawer
-                                  analyze     search
 ```
 
 ### Layer 1: Cron PID Polling (always-on)
@@ -230,20 +234,35 @@ python3 ~/.hermes/task_monitor/taskctl.py status
 
 ## Application: Reverse Pipeline in Practice
 
-### Use Case 1: Experiment Feedback Loop
+### Use Case 1: Experiment Feedback Loop (with diagnose/suggest/iterate)
 
 ```bash
 python3 ~/.hermes/task_monitor/taskctl.py add \
   --id "exp_$(date +%s)" --pid $PID --duration 7200 \
   --on-success "
-    expflow analyze advise --task task1 &&
-    expflow clearml compare-scores \\
-      --project PDEBench --tags task1 --gate pde_mean:lt:18.09 &&
-    hfpclawer search --query 'FNO autoregressive' --max-pages 2
+    expflow analyze diagnose --json evaluation_results/eval_result.json &&
+    expflow analyze suggest --json evaluation_results/eval_result.json
   "
 ```
 
-### Use Case 2: Cascading Steps
+### Use Case 2: One-Shot Iterate (remote clearml, no PID needed)
+
+When using clearml-agent on a remote GPU (Mode B/C), PID monitoring doesn't work.
+Use `expflow iterate run` directly after the clearml task completes:
+
+```bash
+# After clearml task abc123 completes on 5090:
+expflow iterate run --task abc123 --queue default --dry-run
+expflow iterate run --task abc123 --queue default
+
+# Or with a local eval JSON:
+expflow iterate run --json evaluation_results/eval_task1_v1.json --queue default
+```
+
+`iterate` reads clearml metrics, diagnoses degradation, suggests next params,
+and submits the next iteration — all in one command. `--dry-run` previews first.
+
+### Use Case 3: Full Hermes /goal Loop
 
 ```bash
 python3 train_task1.py &
@@ -323,15 +342,18 @@ consolidation** are. The highest-ROI usage is:
 ```bash
 /goal reach seg_total 140 on PDEBench Task1
 
-Hermes /goal + llm-wiki iteration:
-  loop (max 20 turns):
-    search hfpclawer wiki     -> find relevant entries
-    cross-reference memory    -> connect past findings
-    update llm-wiki            -> consolidate new knowledge
-    judge: "goal met?"         -> continue or stop
+Hermes /goal + expflow loop (max 20 turns):
+  loop:
+    expflow analyze advise         -> decide strategy
+    expflow pipeline submit        -> submit to remote GPU
+    wait for completion (clearml)  -> experiment runs on 5090
+    expflow analyze diagnose       -> read clearml metrics
+    expflow analyze suggest        -> next params
+    expflow iterate run --dry-run  -> preview next iteration
+    judge: \"goal met?\"             -> continue or stop
 
-  No GPU, no ClearML, no taskctl needed.
-  Pure knowledge work: search -> reason -> write -> verify.
+  No PID monitoring needed.
+  All state in clearml server + expflow CLI.
 ```
 
 Key difference:
