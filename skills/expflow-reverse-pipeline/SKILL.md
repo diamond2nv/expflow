@@ -295,3 +295,55 @@ taskctl.py add --id step1_train --pid $! --duration 7200 \
 - [ ] Structured JSON log: taskctl.log.jsonl contains parseable events
 - [ ] No hardcoded paths or user IDs in any file
 - [ ] `setup.sh` works for a fresh user
+
+## Usage Notes by Competition Phase
+
+### Exploration Phase (long-term R&D)
+
+Use the **full three-layer reverse pipeline** to drive iterative
+data-experiment-feedback loops:
+
+```bash
+/goal explore optimal architecture for Task3 KS equation
+
+Hermes + taskctl + ZMQ + ClearML:
+  loop:
+    expflow analyze advise -> decide strategy
+    taskctl register ...   -> run experiment
+    cron/ZMQ completion    -> trigger analysis
+    chain: expflow analyze -> update _TASK_META
+```
+
+### Fast Competition Phase (sprint, current priority)
+
+In fast comp sprint mode (days, not weeks), running multiple GPU experiment
+iterations is not the bottleneck — **information retrieval and knowledge
+consolidation** are. The highest-ROI usage is:
+
+```bash
+/goal reach seg_total 140 on PDEBench Task1
+
+Hermes /goal + llm-wiki iteration:
+  loop (max 20 turns):
+    search hfpclawer wiki     -> find relevant entries
+    cross-reference memory    -> connect past findings
+    update llm-wiki            -> consolidate new knowledge
+    judge: "goal met?"         -> continue or stop
+
+  No GPU, no ClearML, no taskctl needed.
+  Pure knowledge work: search -> reason -> write -> verify.
+```
+
+Key difference:
+
+| Aspect | Exploration Loop | Fast Sprint |
+|--------|-----------------|-------------|
+| Core engine | taskctl + ZMQ + ClearML | Hermes + llm-wiki |
+| Latency | Hours (experiment) | Minutes (retrieval) |
+| Resource | GPU + queue | 0 GPU (search only) |
+| Output | Experiment results | Structured knowledge |
+| Best for | Architecture search, HPO | Comp strategy, sprint decisions |
+
+The reverse pipeline (taskctl + ZMQ) is always available for when you do
+run experiments — but during fast comp sprint, invest tokens in **wiki
+iteration** instead of experiment orchestration.
