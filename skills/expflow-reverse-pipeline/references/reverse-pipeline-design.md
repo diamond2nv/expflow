@@ -51,21 +51,56 @@ expflow pipeline submit ──> ClearML experiment
 
 ## Architecture
 
-### Three Layers
+### Three Layers (Current: v0.5.2)
 
-| Layer | Technology | Role |
-|-------|-----------|------|
-| **Trigger** | taskctl + crontab | Detect completion/timeout |
-| **Notification** | qq_send.py | Zero-token QQ alert |
-| **Action** | `--on-success` chain | Arbitrary shell commands |
+| Layer | Technology | Latency | Status |
+|-------|-----------|---------|--------|
+| **L1 (Trigger)** | taskctl + crontab PID polling | 15min | Active |
+| **L2 (Event)** | ZeroMQ PUB-SUB (port 15556/15557) | ~1ms | Active |
+| **L3 (Goal)** | Hermes Agent goal engine (external) | Variable | Planning |
 
-### No New Infrastructure
+### ZeroMQ Event Broker (NEW)
 
-The reverse pipeline adds **zero infrastructure**:
-- No ZeroMQ broker needed (though ZeroMQ is available for real-time upgrades)
-- No Hermes gateway dependency (notification via standalone REST API)
-- No LLM calls (notification text is template-based)
-- No database changes (state in `tasks.json`, FIFO max 50)
+The broker runs inside `taskctl.py daemon` as a PUB socket. Events flow:
+
+```
+taskctl daemon (PUB on port 15556)
+    |
+    +-- IPC: ipc:///tmp/taskctl_pub.ipc  (local processes)
+    +-- TCP: tcp://127.0.0.1:15556       (Hermes Agent, cross-process)
+    |
+    +-- Topic: taskctl/<id>/complete     (experiment done)
+    +-- Topic: taskctl/<id>/timeout      (experiment timeout)
+    +-- Topic: taskctl/<id>/register     (new task registered)
+    +-- Topic: system/heartbeat          (daemon alive every 60s)
+```
+
+Subscriber pattern (e.g. Hermes Agent):
+
+```python
+from zmq_broker import Subscriber
+sub = Subscriber(port=15557)
+sub.start(topics=["taskctl/", "system/"])
+events = sub.poll(timeout_ms=5000)
+for e in events:
+    if e["topic"].endswith("/complete"):
+        # Auto-trigger reverse pipeline
+```
+
+### QoS Semantics
+
+| QoS | Mechanism | Guarantee |
+|-----|-----------|-----------|
+| **0** (fire-and-forget) | ZMQ PUB (no ack) | Best effort |
+| **1** (at-least-once) | ZMQ PUB + JSONL fallback | Replayable on reconnect |
+| **2** (exactly-once) | Not implemented (requires ROUTER-DEALER) | Future |
+
+### No New Infrastructure (still true)
+
+The reverse pipeline adds **minimal infrastructure**:
+- pyzmq is the only new dependency
+- No broker daemon needed in cron-only mode
+- No new ports to open (all loopback)
 
 ## Using the Reverse Pipeline
 
@@ -128,23 +163,52 @@ The two patterns coexist:
 See the original architecture design doc for ZeroMQ port assignments
 (15556/15557, PUB-SUB fanout) and topic schemas.
 
-## Relation to Hermes Goal
+## Integration with Hermes /goal (active)
 
-When Hermes Agent supports a `goal` command (persistent objective driving),
-the reverse pipeline becomes the execution layer:
+Hermes Agent has a built-in `/goal` slash command that persists an objective
+across turns. After each response, a light **judge** model checks: "is this
+goal satisfied?" If not, a continuation prompt is auto-injected. The reverse
+pipeline feeds the goal loop with execution results.
 
 ```
-User: goal: reach 140 on Task1
+User:  /goal reach seg_total 140 on Task1
 
-Hermes goal engine:
-  while seg_total < 140:
-    expflow analyze advise         -> next strategy
-    taskctl submit(...)            -> run experiment
-    taskctl check (cron)           -> wait for completion
-    on-success chain: evaluate     -> check seg_total
-    loop
+Hermes session loop (max 20 auto-continuation turns):
+  ┌─────────────────────────────────────────────────┐
+  │ Turn 1: expflow analyze advise                  │
+  │     -> "Try sub_step=5 with P2(16/32)"          │
+  │ Turn 2: taskctl add --pid $PID --duration 7200  │
+  │     -> --on-success "evaluate_seg.py && echo"    │
+  │ Judge: "Not yet (task just started)"            │
+  ├─────────────────────────────────────────────────┤
+  │ (cron detects completion)                       │
+  │ on-success chain: evaluate_seg.py               │
+  │ output: seg_total=116, still need improvement   │
+  ├─────────────────────────────────────────────────┤
+  │ Turn 3: agent reads result from chain output    │
+  │     -> "seg_total=116, need 140. Try Stability  │
+  │        FT (step variance) to push past plateau" │
+  │ Judge: "Not yet (116 < 140)"                    │
+  ├─────────────────────────────────────────────────┤
+  │ ... loop until seg_total >= 140 or blocked ...  │
+  └─────────────────────────────────────────────────┘
 ```
 
-The reverse pipeline provides the **imperative execution** (run, detect,
-react) while the goal engine provides the **declarative planning** (what to
-achieve, how to decompose, when to stop).
+`/goal` sub-commands:
+- `/goal <text>` — Set a new standing goal
+- `/goal pause` — Pause goal loop (keep goal)
+- `/goal resume` — Resume paused goal
+- `/goal clear` — Clear active goal
+- `/goal status` — Show current goal + progress
+
+Key integration points:
+- **State persistence**: Goals survive `/resume` (stored in SessionDB `goal:<id>`)
+- **User message preemption**: If user sends a message, it takes priority and pauses
+  the goal loop for that turn (goal is NOT cleared)
+- **Judge fail-open**: If the judge fails to parse, the loop continues (turn budget
+  is the backstop). After 3 consecutive parse failures, auto-pauses.
+- **Continuation prompt**: Is just a normal user message — no system prompt changes,
+  no toolset swap, prompt caching stays intact
+- **Reverse pipeline**: taskctl's `--on-success` chain bridges the gap between
+  "agent decided what to do" and "agent knows the result" — the chain output
+  feeds back into the next conversation turn
