@@ -57,3 +57,16 @@ ClawHub 网站需要 GitHub 登录后才能看到提交表单。登录后到以�
 | **Tags** | mlops, competition, strategy, equations, analysis, planning, pde, task-intelligence |
 | **Homepage** | https://github.com/diamond2nv/expflow |
 | **SKILL.md URL** | `https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/competition-task-intelligence/SKILL.md` |
+
+---
+
+## Skill 5: expflow-reverse-pipeline
+
+| 字段 | 值 |
+|------|-----|
+| **Name** | `expflow-reverse-pipeline` |
+| **Description** | Zero-token background task monitor for the reverse pipeline pattern. Register PID-based tasks; crontab polls completion/timeout every 15min; auto-sends QQ notification and triggers chain commands (expflow analyze, hfpclawer search) to close the data-experiment-feedback loop. |
+| **Category** | devops |
+| **Tags** | monitor, reverse-pipeline, cron, qq, no-llm, expflow, hfpclawer, experiment |
+| **Homepage** | https://github.com/diamond2nv/expflow |
+| **SKILL.md URL** | `https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/expflow-reverse-pipeline/SKILL.md` |
