@@ -8,7 +8,11 @@ SDK-specific features (clearml, optuna, langfuse) are loaded on demand.
 
 from __future__ import annotations
 
-__version__ = "0.5.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("expflow-pde")
+except Exception:
+    __version__ = "0.0.0"
 
 # ── Lazy import helpers ──
 # clearml/optuna/langfuse SDKs are optional dependencies.

@@ -19,6 +19,8 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(HERE, ".."))
 
+from expflow_pde import __version__ as _ver
+
 
 def _built_wheel_path() -> str | None:
     """Find the latest .whl in dist/."""
@@ -89,7 +91,7 @@ class TestEntryPoint:
         """Entry point --version works correctly."""
         result = _run_entry_point(["version"])
         assert result.returncode == 0
-        assert result.stdout.strip() == "expflow v0.4.0"
+        assert result.stdout.strip() == f"expflow v{_ver}"
         assert result.stderr == ""
 
     def test_entry_point_help(self):
@@ -172,7 +174,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert ver_result.returncode == 0, f"version failed: {ver_result.stderr}"
-            assert ver_result.stdout.strip() == "expflow v0.4.0"
+            assert ver_result.stdout.strip() == "expflow v0.5.0"
 
             # info command should work
             info_result = subprocess.run(
