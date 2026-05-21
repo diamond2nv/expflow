@@ -134,15 +134,22 @@ def submit_cmd(
 
     if repair and wait:
         max_retries = 2
+        applied_fix_params: dict[str, Any] = {}
         for retry_attempt in range(max_retries):
             repair_result = _maybe_repair_pipeline(
                 result, repair_reflection, queue, project, repair_output
             )
             if not repair_result:
                 break
+            # Check if repair has fix_params to apply on re-submit
+            fix_params = repair_result.get("fix_params", {})
+            if fix_params:
+                applied_fix_params.update(fix_params)
             if repair_result.get("fixed") and repair_result.get("level") != "L2":
                 if retry_attempt < max_retries - 1:
                     print(f"  Repair:   re-submitting (attempt {retry_attempt + 1}/{max_retries})...")
+                    if applied_fix_params.get("packages") is not None:
+                        print(f"  Repair:   applying fix_params: packages={applied_fix_params['packages']}")
                     ep = ExperimentPipeline(
                         project=project,
                         queue=queue,
@@ -162,7 +169,7 @@ def submit_cmd(
                     )
                     _print_result(result, wait, timeout)
                 else:
-                    print(f"  Repair:   max retries reached, escalating to manual inspection")
+                    print("  Repair:   max retries reached, escalating to manual inspection")
             else:
                 break
 
@@ -258,15 +265,22 @@ def submit_full_cmd(
 
     if repair and wait:
         max_retries = 2
+        applied_fix_params: dict[str, Any] = {}
         for retry_attempt in range(max_retries):
             repair_result = _maybe_repair_pipeline(
                 result, repair_reflection, queue, project, repair_output
             )
             if not repair_result:
                 break
+            # Check if repair has fix_params to apply on re-submit
+            fix_params = repair_result.get("fix_params", {})
+            if fix_params:
+                applied_fix_params.update(fix_params)
             if repair_result.get("fixed") and repair_result.get("level") != "L2":
                 if retry_attempt < max_retries - 1:
                     print(f"  Repair:   re-submitting (attempt {retry_attempt + 1}/{max_retries})...")
+                    if applied_fix_params.get("packages") is not None:
+                        print(f"  Repair:   applying fix_params: packages={applied_fix_params['packages']}")
                     ep = ExperimentPipeline(
                         project=project,
                         queue=queue,
@@ -288,7 +302,7 @@ def submit_full_cmd(
                     )
                     _print_result(result, wait, timeout)
                 else:
-                    print(f"  Repair:   max retries reached, escalating to manual inspection")
+                    print("  Repair:   max retries reached, escalating to manual inspection")
             else:
                 break
 
@@ -327,14 +341,17 @@ _SIGNAL_CODES: dict[int, str] = {
 _FAILURE_KEYWORDS = ("Traceback", "Error", "Failed", "Killed")
 
 
-def _fetch_task_log(pipeline_id: str) -> tuple[str, int]:
+def _fetch_task_log(pipeline_id: str) -> tuple[str, int, bool]:
     """Fetch pipeline task log from clearml with fallback.
 
     Returns:
-        (task_log, exit_code). Empty log on failure.
+        (task_log, exit_code, fetch_success).
+        fetch_success=False means clearml API call failed (network/auth).
+        fetch_success=True means SDK returned normally (log may still be empty).
     """
     task_log = ""
     exit_code = 1
+    fetch_success = False
     try:
         from clearml import Task
 
@@ -347,14 +364,15 @@ def _fetch_task_log(pipeline_id: str) -> tuple[str, int]:
             exit_code = 1
         elif "killed" in status_str:
             exit_code = 137
+        fetch_success = True
     except ImportError:
         logger.warning("clearml SDK not available — cannot fetch task log")
     except Exception as e:
         logger.warning("Failed to fetch clearml task log for %s: %s", pipeline_id, e)
 
-    if not task_log:
+    if not task_log and fetch_success:
         logger.warning("clearml returned empty log for %s — repair will have no T context", pipeline_id)
-    return task_log, exit_code
+    return task_log, exit_code, fetch_success
 
 
 def _task_log_valid(task_log: str) -> bool:
@@ -441,7 +459,13 @@ def _maybe_repair_pipeline(
     print(f"  Repair:   pipeline failed (status={status}), analyzing...")
 
     # Fetch task log with fallback handling
-    task_log, exit_code = _fetch_task_log(pipeline_id)
+    task_log, exit_code, fetch_success = _fetch_task_log(pipeline_id)
+    if not fetch_success:
+        print("  Repair:   WARNING — clearml API call failed (network/auth). "
+              "Repair analysis will be incomplete.")
+    if not task_log:
+        # Use what we have — _task_log_valid will catch empty logs
+        pass
 
     from expflow_pde.pipeline import ExperimentPipeline
 
@@ -459,7 +483,7 @@ def _maybe_repair_pipeline(
     print(f"  Exit:     code={exit_code} ({ec_cat})")
     input_valid = repair_result.get("input_valid", True)
     if not input_valid:
-        print(f"  Warning:  task_log empty or has no failure signal — repair context may be incomplete")
+        print("  Warning:  task_log empty or has no failure signal — repair context may be incomplete")
     if repair_result.get("history"):
         print(f"  History:  {len(repair_result['history'])} attempt(s)")
 
@@ -472,7 +496,7 @@ def _maybe_repair_pipeline(
     # Write structured repair output to file for Hermes L2 executor
     if resolved_output:
         if not repair_result.get("input_valid", True):
-            print(f"  Warning:  L2 input invalid — skipping repair_output write (use manual inspection)")
+            print("  Warning:  L2 input invalid — skipping repair_output write (use manual inspection)")
         else:
             import json
             import os

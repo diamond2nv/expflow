@@ -86,6 +86,7 @@ class GitProjectNotFoundRule(RepairRule):
             "command": "ssh -T git@gitlab-pdebench",
             "confidence": 0.85,
             "needs_user_action": True,
+            "fix_params": {},
         }
 
 
@@ -177,6 +178,7 @@ class PipConflictRule(RepairRule):
             "command": None,
             "confidence": 0.90,
             "needs_user_action": False,
+            "fix_params": {"packages": []},
         }
 
 

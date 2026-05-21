@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+import re as _re
 from typing import Any
 
 from expflow_pde.repair_rules import match_first
@@ -177,6 +177,7 @@ class RepairStage:
                 "action": suggestion.get("action", ""),
                 "confidence": suggestion.get("confidence", 0.0),
                 "needs_user_action": needs_user,
+                "fix_params": suggestion.get("fix_params", {}),
             }
         return {"level": "L0", "matched": False, "fixed": False, "action": "No rule matched"}
 
@@ -245,7 +246,7 @@ class RepairStage:
         last_line = 0
         for line in reversed(tb_lines):
             if line.strip().startswith("File "):
-                match = re.search(r'File "(.+?)", line (\d+)', line)
+                match = _re.search(r'File "(.+?)", line (\d+)', line)
                 if match:
                     last_file = match.group(1)
                     last_line = int(match.group(2))
@@ -330,14 +331,20 @@ class RepairStage:
         # Extract file paths from traceback
         files_to_check: list[str] = []
         for line in tb_lines:
-            m = re.search(r'File "(.+?)"', line)
+            m = _re.search(r'File "(.+?)"', line)
             if m:
                 fp = m.group(1)
                 if fp not in files_to_check:
                     files_to_check.append(fp)
 
         # Map exception type to relevant wiki pages
-        wiki_info = self._exc_type_to_wiki(exc_type, exc_message)
+        # Use L1 signal info when available (overrides generic fallback)
+        l1_ec_cat = (l1_result or {}).get("exit_code_category", "")
+        if exit_code in SIGNAL_CODES and l1_ec_cat and l1_ec_cat.startswith("signal"):
+            wiki_info = self._signal_to_wiki(exit_code, exc_type, exc_message)
+        else:
+            wiki_info = self._exc_type_to_wiki(exc_type, exc_message)
+
         wiki_paths = wiki_info.get("paths", [])
         wiki_source = wiki_info.get("source", "none")
 
@@ -419,23 +426,71 @@ class RepairStage:
         return {"paths": [], "source": "none"}
 
     @staticmethod
+    def _word_in(combined: str, word: str) -> bool:
+        """Case-insensitive whole-word match (\\b boundaries)."""
+        return bool(_re.search(r'\b' + _re.escape(word) + r'\b', combined))
+
+    @staticmethod
     def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:
         """Content-based fallback classification for unmapped exception types.
 
+        Uses whole-word matching to avoid short-keyword false positives.
         Checks both exc_type and exc_message for known keywords.
         """
         combined = (exc_type + " " + exc_message).lower()
-        if any(kw in combined for kw in ("cuda", "out of memory", "oom")):
+        # Exclude list — exc_types known to trigger false positives on short keywords.
+        type_only = exc_type.lower()
+        _EXCLUDED_TYPES = ("diskerror", "diskioerror")  # "disk" in "diskerror" → skip
+
+        if any(excl in type_only for excl in _EXCLUDED_TYPES):
+            return []
+
+        if (RepairStage._word_in(combined, "cuda")
+                or RepairStage._word_in(combined, "out of memory")
+                or RepairStage._word_in(combined, "oom")):
             return ["~/wiki/troubleshooting/gpu-memory.md"]
-        if any(kw in combined for kw in ("killed", "signal", "sigkill", "sigterm")):
+        if (RepairStage._word_in(combined, "killed")
+                or RepairStage._word_in(combined, "sigkill")
+                or RepairStage._word_in(combined, "sigterm")
+                or RepairStage._word_in(combined, "sigabrt")
+                or RepairStage._word_in(combined, "sigsegv")
+                or RepairStage._word_in(combined, "signal 11")
+                or RepairStage._word_in(combined, "signal 6")
+                or RepairStage._word_in(combined, "signal 15")):
             return ["~/wiki/troubleshooting/oom-killer.md"]
-        if any(kw in combined for kw in ("bus error", "shm", "/dev/shm")):
+        if (RepairStage._word_in(combined, "bus error")
+                or RepairStage._word_in(combined, "shm")
+                or RepairStage._word_in(combined, "/dev/shm")):
             return ["~/wiki/troubleshooting/shared-memory.md"]
-        if any(kw in combined for kw in ("disk", "quota", "no space", "storage")):
+        if (RepairStage._word_in(combined, "no space")
+                or RepairStage._word_in(combined, "disk quota")
+                or RepairStage._word_in(combined, "disk full")
+                or RepairStage._word_in(combined, "storage exhausted")):
             return ["~/wiki/troubleshooting/disk-space.md"]
-        if any(kw in combined for kw in ("timeout", "time out", "deadline")):
+        if (RepairStage._word_in(combined, "timeout")
+                or RepairStage._word_in(combined, "time out")
+                or RepairStage._word_in(combined, "deadline")):
             return ["~/wiki/troubleshooting/timeouts.md"]
         return []
+
+    @staticmethod
+    def _signal_to_wiki(exit_code: int, sig_name: str,
+                       exc_message: str = "") -> dict[str, Any]:
+        """Map signal exit codes to specific troubleshooting wiki pages.
+
+        137 (SIGKILL) → oom-killer.md
+        139 (SIGSEGV) → segfault.md
+        134 (SIGABRT) → abort.md
+        143 (SIGTERM) → timeouts.md (most common cause: timeout-killed)
+        """
+        mapping = {
+            137: "oom-killer.md",
+            139: "segfault.md",
+            134: "abort.md",
+            143: "timeouts.md",
+        }
+        page = mapping.get(exit_code, "unknown-signal.md")
+        return {"paths": [f"~/wiki/troubleshooting/{page}"], "source": "signal"}
 
     def _render_l2_prompt(self, context: dict) -> str:
         """Render the subagent prompt template with actual context values."""
@@ -464,16 +519,22 @@ class RepairStage:
             "## Task\n"
             "1. Identify the root cause.\n"
             "2. Determine which files need changes and what the changes are.\n"
-            "3. Return a fix plan in this EXACT format:\n"
+            "3. Return a fix plan as VALID JSON using this EXACT schema:\n"
             "\n"
-            "   file: <relative or absolute path>\n"
-            "   old: <exact text to replace>\n"
-            "   new: <replacement text>\n"
+            "   {\n"
+            '     "plan_type": "fix",\n'
+            '     "files": [{"path": "train.py", "old": "...", "new": "..."}],\n'
+            '     "reasoning": "one-line explanation"\n'
+            "   }\n"
             "\n"
-            "   You may include multiple fix blocks.\n"
-            "   If you cannot determine the fix, return: no_plan: <reason>\n"
+            "   If you CANNOT determine the fix, return:\n"
+            "   {\n"
+            '     "plan_type": "no_plan",\n'
+            '     "reason": "why you cannot produce a fix"\n'
+            "   }\n"
             "\n"
-            "Do NOT apply changes directly. Do NOT run code. Return only the plan."
+            "   OUTPUT ONLY THE JSON BLOCK — no markdown fences, no extra text.\n"
+            "   Do NOT apply changes directly. Do NOT run code.\n"
         )
 
     # ── Internal helpers ──
@@ -499,9 +560,13 @@ class RepairStage:
             for key in ("exc_type", "exc_message", "files_to_check",
                        "wiki_paths", "wiki_source", "tb_snippet", "subagent_prompt",
                        "subagent_schema", "exit_code", "experiment_id",
-                       "context_length", "input_valid"):
+                       "context_length", "input_valid", "fix_params"):
                 if key in detail:
                     result[key] = detail[key]
+        else:
+            # Propagate fix_params for L0 results so re-submit can use them
+            if level == "L0" and "fix_params" in detail:
+                result["fix_params"] = detail["fix_params"]
         return result
 
     def to_json(self) -> str:

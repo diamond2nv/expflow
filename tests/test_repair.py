@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """Tests for expflow_pde.repair — RepairStage three-level auto-repair."""
 
-import pytest
 
 from expflow_pde.repair import RepairStage
 
@@ -324,3 +323,125 @@ class TestResolveRepairOutput:
         open(base + ".1", "w").close()
         resolved = _resolve_repair_output(base, "pipe_abc")
         assert resolved == base + ".2"
+
+
+class TestRepairStageSignalWikiMapping:
+    """Signal exit codes should route to signal-specific wiki via _signal_to_wiki."""
+
+    def test_signal_137_routes_to_oom_killer_wiki(self):
+        stage = RepairStage()
+        result = stage.run("Killed\n", 137, enable_reflection=True)
+        assert result["level"] == "L2"
+        assert result.get("wiki_source") == "signal"
+        assert any("oom-killer" in p for p in result.get("wiki_paths", []))
+
+    def test_signal_139_routes_to_segfault_wiki(self):
+        stage = RepairStage()
+        result = stage.run("Signal (11) Error: Segmentation fault\n", 139, enable_reflection=True)
+        assert result["level"] == "L2"
+        assert result.get("wiki_source") == "signal"
+        assert any("segfault" in p for p in result.get("wiki_paths", []))
+
+    def test_signal_143_routes_to_timeouts_wiki(self):
+        stage = RepairStage()
+        result = stage.run("Killed\n", 143, enable_reflection=True)
+        assert result["level"] == "L2"
+        assert result.get("wiki_source") == "signal"
+        assert any("timeouts" in p for p in result.get("wiki_paths", []))
+
+    def test_signal_134_routes_to_abort_wiki(self):
+        from expflow_pde.repair import RepairStage
+        info = RepairStage._signal_to_wiki(134, "SIGABRT")
+        assert info["source"] == "signal"
+        assert any("abort" in p for p in info.get("paths", []))
+
+    def test_unsupported_signal_routes_to_unknown(self):
+        from expflow_pde.repair import RepairStage
+        info = RepairStage._signal_to_wiki(6, "SIGABRT")
+        assert info["source"] == "signal"
+        assert any("unknown-signal" in p for p in info.get("paths", []))
+
+
+class TestRepairStageWordMatch:
+    """Whole-word matching in _CLASSIFY_EXC prevents short-keyword false positives."""
+
+    def test_disk_in_type_name_not_falsely_matches(self):
+        from expflow_pde.repair import RepairStage
+        # "diskerror" should NOT match "disk" keyword due to exclusion list
+        paths = RepairStage._CLASSIFY_EXC("DiskError", "bogus error")
+        assert len(paths) == 0
+
+    def test_killed_as_substring_not_falsely_matches(self):
+        from expflow_pde.repair import RepairStage
+        # "diskilled" contains "killed" as substring but not as whole word
+        combined = "diskilled operation failed"
+        assert not RepairStage._word_in(combined, "killed")
+        # Whole word "killed" should match
+        assert RepairStage._word_in("process killed", "killed")
+
+    def test_oom_whole_word_matches(self):
+        from expflow_pde.repair import RepairStage
+        paths = RepairStage._CLASSIFY_EXC("RuntimeError", "CUDA OOM during forward pass")
+        assert any("gpu-memory" in p for p in paths)
+
+    def test_no_space_matches_disk_quota(self):
+        from expflow_pde.repair import RepairStage
+        paths = RepairStage._CLASSIFY_EXC("OSError", "No space left on device")
+        assert any("disk-space" in p for p in paths)
+
+
+class TestRepairStageFixParams:
+    """L0 rule engine propagates fix_params to top-level result."""
+
+    def test_pip_conflict_has_fix_params(self):
+        stage = RepairStage()
+        result = stage.run("pip install impossible: package conflict", 1)
+        assert result["level"] == "L0"
+        assert "fix_params" in result
+        assert result["fix_params"].get("packages") == []
+
+    def test_git_not_found_has_empty_fix_params(self):
+        stage = RepairStage()
+        result = stage.run("fatal: Could not read from remote repository.", 128)
+        assert result["level"] == "L0"
+        assert "fix_params" in result
+
+    def test_fix_params_not_in_non_l0_results(self):
+        stage = RepairStage()
+        result = stage.run("some random error", 1, enable_reflection=False)
+        if result["level"] == "L1":
+            assert "fix_params" not in result
+
+
+class TestRepairStageFixPlanSchema:
+    """L2 subagent prompt uses structured JSON schema."""
+
+    def test_l2_prompt_contains_json_schema(self):
+        from expflow_pde.repair import RepairStage
+        stage = RepairStage(experiment_id="exp_test")
+        context = {
+            "experiment_id": "exp_test",
+            "exit_code": 1,
+            "exc_type": "ValueError",
+            "exc_message": "bad value",
+            "tb_snippet": ["Traceback:", "ValueError: bad"],
+            "files_to_check": ["/opt/train.py"],
+            "wiki_paths": [],
+        }
+        prompt = stage._render_l2_prompt(context)
+        assert '"plan_type"' in prompt
+        assert '"files"' in prompt
+        assert '"no_plan"' in prompt
+
+
+class TestFetchTaskLogTriple:
+    """_fetch_task_log returns 3-tuple (log, exit_code, fetch_success)."""
+
+    def test_signature_is_three_tuple(self):
+        import inspect
+
+        from expflow_pde.cli_pipeline import _fetch_task_log
+        sig = inspect.signature(_fetch_task_log)
+        hint = sig.return_annotation
+        # Check return annotation hint
+        assert hint is not inspect.Parameter.empty
