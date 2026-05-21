@@ -101,6 +101,34 @@ _FAILURE_TEMPLATES: dict[str, tuple[str, int, str]] = {
         1,
         "L2",
     ),
+    # T2: signal exit code — process killed by OOM (no Python traceback)
+    "signal_oom": (
+        "Killed\n",
+        137,
+        "L1_signal",
+    ),
+    # T6: log too short — no failure signal keywords
+    "empty_log": (
+        "\n",
+        1,
+        "L2_invalid",
+    ),
+    # T4: content-based fallback classification — disk quota
+    "disk_quota": (
+        "RuntimeError: No space left on device while writing checkpoint\n"
+        "OSError: [Errno 28] No space left on device\n",
+        1,
+        "L2_fallback",
+    ),
+    # T4: ImportError prefix (not substring "git")
+    "import_error": (
+        "Traceback (most recent call last):\n"
+        "  File \"/opt/clearml.py\", line 42, in setup\n"
+        "    from clearml import Task\n"
+        "ImportError: cannot import name 'Task' from 'clearml'\n",
+        1,
+        "L2_prefix",
+    ),
 }
 
 

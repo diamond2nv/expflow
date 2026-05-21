@@ -152,13 +152,12 @@ def auto(
 
         # Repair if failed
         if result["status"] == "failed" and repair:
+            inject = result.get("inject_failure", {})
+            exit_code = inject.get("exit_code", 1)
             stage = RepairStage(experiment_id=result["experiment_id"])
             repair_result = stage.run(
                 task_log=result.get("task_log", ""),
-                exit_code=(
-                    result.get("inject_failure", {}).get("expected_repair_level") == "L0"
-                    and 128 or 1
-                ),
+                exit_code=exit_code,
                 enable_reflection=True,
             )
             print(f"  Repair: level={repair_result['level']}, fixed={repair_result['fixed']}")

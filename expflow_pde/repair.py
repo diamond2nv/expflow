@@ -121,7 +121,7 @@ class RepairStage:
 
         # L2: Reflection subagent (only if enabled)
         if enable_reflection:
-            l2_result = self._try_l2(task_log, exit_code)
+            l2_result = self._try_l2(task_log, exit_code, l1_result)
             self._repair_history.append(l2_result)
             return self._build_result("L2", l2_result)
 
@@ -267,11 +267,18 @@ class RepairStage:
 
     # ── L2: Reflection subagent────
 
-    def _try_l2(self, task_log: str, exit_code: int) -> dict[str, Any]:
+    def _try_l2(self, task_log: str, exit_code: int,
+               l1_result: dict[str, Any] | None = None) -> dict[str, Any]:
         """Prepare structured L2 reflection context for Hermes subagent.
 
         Returns a machine-readable dict that Hermes can consume to spawn a
         delegate_task subagent. The subagent produces a fix plan (not code).
+
+        Args:
+            task_log: Console output from failed task.
+            exit_code: Process exit code.
+            l1_result: Output of _try_l1() — may have already identified
+                       signal exit codes or extracted traceback info.
         """
         # Input validation — early exit if log has no useful signal
         if not _log_has_failure_signal(task_log):
@@ -298,18 +305,27 @@ class RepairStage:
             if len(tb_lines) > 30:
                 break
 
-        # Identify exception type and message
+        # Reuse L1 results for signal exit codes (no Python traceback)
         exc_type = "Unknown"
         exc_message = ""
-        for line in reversed(tb_lines):
-            stripped = line.strip()
-            if stripped and "File" not in stripped and "Traceback" not in stripped:
-                if ":" in stripped:
-                    exc_type = stripped.split(":")[0].strip()
-                    exc_message = ":".join(stripped.split(":")[1:]).strip()
-                else:
-                    exc_type = stripped.strip()
-                break
+        if not tb_lines and l1_result:
+            exc_type = l1_result.get("exc_type", "Unknown") or "Unknown"
+            exc_message = l1_result.get("exc_message", "")
+
+        if not tb_lines and exc_type == "Unknown":
+            pass  # will fall through to regular extraction below
+
+        # Identify exception type and message from traceback
+        if not exc_type or exc_type == "Unknown":
+            for line in reversed(tb_lines):
+                stripped = line.strip()
+                if stripped and "File" not in stripped and "Traceback" not in stripped:
+                    if ":" in stripped:
+                        exc_type = stripped.split(":")[0].strip()
+                        exc_message = ":".join(stripped.split(":")[1:]).strip()
+                    else:
+                        exc_type = stripped.strip()
+                    break
 
         # Extract file paths from traceback
         files_to_check: list[str] = []
@@ -321,7 +337,7 @@ class RepairStage:
                     files_to_check.append(fp)
 
         # Map exception type to relevant wiki pages
-        wiki_info = self._exc_type_to_wiki(exc_type)
+        wiki_info = self._exc_type_to_wiki(exc_type, exc_message)
         wiki_paths = wiki_info.get("paths", [])
         wiki_source = wiki_info.get("source", "none")
 
@@ -378,12 +394,12 @@ class RepairStage:
         # Signal- or content-based — matched via _CLASSIFY_EXC fallback
     ]
 
-    def _exc_type_to_wiki(self, exc_type: str) -> dict[str, Any]:
+    def _exc_type_to_wiki(self, exc_type: str, exc_message: str = "") -> dict[str, Any]:
         """Map exception type to relevant wiki page paths.
 
         Returns dict with keys:
             paths: list[str] — wiki file paths
-            source: str — \"exact\" | \"prefix\" | \"substring\" | \"fallback\" | \"none\"
+            source: str — "exact" | "prefix" | "substring" | "fallback" | "none"
         """
         if not exc_type or exc_type == "Unknown":
             return {"paths": [], "source": "none"}
@@ -397,24 +413,27 @@ class RepairStage:
                 return {"paths": list(entry["paths"]), "source": "substring"}
 
         # Fallback — content-based classification for no explicit key matched
-        paths = self._CLASSIFY_EXC(exc_type)
+        paths = self._CLASSIFY_EXC(exc_type, exc_message)
         if paths:
             return {"paths": paths, "source": "fallback"}
         return {"paths": [], "source": "none"}
 
     @staticmethod
-    def _CLASSIFY_EXC(exc_type: str) -> list[str]:
-        """Content-based fallback classification for unmapped exception types."""
-        lower = exc_type.lower()
-        if any(kw in lower for kw in ("cuda", "out of memory", "oom")):
+    def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:
+        """Content-based fallback classification for unmapped exception types.
+
+        Checks both exc_type and exc_message for known keywords.
+        """
+        combined = (exc_type + " " + exc_message).lower()
+        if any(kw in combined for kw in ("cuda", "out of memory", "oom")):
             return ["~/wiki/troubleshooting/gpu-memory.md"]
-        if any(kw in lower for kw in ("killed", "signal", "sigkill", "sigterm")):
+        if any(kw in combined for kw in ("killed", "signal", "sigkill", "sigterm")):
             return ["~/wiki/troubleshooting/oom-killer.md"]
-        if any(kw in lower for kw in ("bus error", "shm", "/dev/shm")):
+        if any(kw in combined for kw in ("bus error", "shm", "/dev/shm")):
             return ["~/wiki/troubleshooting/shared-memory.md"]
-        if any(kw in lower for kw in ("disk", "quota", "no space", "storage")):
+        if any(kw in combined for kw in ("disk", "quota", "no space", "storage")):
             return ["~/wiki/troubleshooting/disk-space.md"]
-        if any(kw in lower for kw in ("timeout", "time out", "deadline")):
+        if any(kw in combined for kw in ("timeout", "time out", "deadline")):
             return ["~/wiki/troubleshooting/timeouts.md"]
         return []
 
