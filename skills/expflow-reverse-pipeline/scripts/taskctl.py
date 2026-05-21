@@ -29,7 +29,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import logging
 import logging.handlers
@@ -38,13 +37,13 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# ─── Optional ZMQ (graceful import fallback) ───────────────────────────
+# --- Optional ZMQ (graceful import fallback) ---
 try:
-    import zmq
+    import zmq as _zmq  # noqa: F401
     HAS_ZMQ = True
 except ImportError:
     HAS_ZMQ = False
@@ -455,7 +454,7 @@ def _init_zmq(pub_port: int = DEFAULT_PUB_PORT) -> Any | None:
         return None
 
     try:
-        from zmq_broker import Publisher, DEFAULT_HWM
+        from zmq_broker import DEFAULT_HWM, Publisher
 
         pub = Publisher(port=pub_port, hwm=DEFAULT_HWM, use_ipc=True, use_tcp=True)
         pub.start()

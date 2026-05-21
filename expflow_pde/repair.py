@@ -431,7 +431,7 @@ class RepairStage:
         return bool(_re.search(r'\b' + _re.escape(word) + r'\b', combined))
 
     @staticmethod
-    def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:
+    def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:  # noqa: N802
         """Content-based fallback classification for unmapped exception types.
 
         Uses whole-word matching to avoid short-keyword false positives.
@@ -440,7 +440,7 @@ class RepairStage:
         combined = (exc_type + " " + exc_message).lower()
         # Exclude list — exc_types known to trigger false positives on short keywords.
         type_only = exc_type.lower()
-        _EXCLUDED_TYPES = ("diskerror", "diskioerror")  # "disk" in "diskerror" → skip
+        _EXCLUDED_TYPES = ("diskerror", "diskioerror")  # noqa: N806
 
         if any(excl in type_only for excl in _EXCLUDED_TYPES):
             return []

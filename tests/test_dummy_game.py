@@ -4,12 +4,9 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from expflow_pde.dispatch_db import DispatchDB
-from expflow_pde.dummy.game import DummyExperimentGame, _FAILURE_TEMPLATES
+from expflow_pde.dummy.game import _FAILURE_TEMPLATES, DummyExperimentGame
 
 
 class TestDummyGameLifecycle:
@@ -54,10 +51,8 @@ class TestDummyGameLifecycle:
         db_path = str(tmp_path / "test.db")
         game = DummyExperimentGame(db_path=db_path)
         game.start()
-        initial = game._current_seg["seg3"]
-        result = game.step(suggested_params={"n_modes": 20, "num_sub_steps": 5})
         # Without noise, this should increase seg3
-        current_seg3 = result["seg"]["seg3"]
+        result = game.step(suggested_params={"n_modes": 20, "num_sub_steps": 5})
         # Noise might offset it, but generally should be higher
         # Just verify it's a valid step
         assert result["status"] == "completed"
@@ -108,7 +103,7 @@ class TestDummyGameFailures:
         assert result["inject_failure"] is not None
         assert result["inject_failure"]["failure"] == pattern_name
 
-    def test_git_not_found_repair_L0(self, tmp_path):
+    def test_git_not_found_repair_L0(self, tmp_path):  # noqa: N802
         db_path = str(tmp_path / "test.db")
         game = DummyExperimentGame(db_path=db_path)
         game.start()
@@ -120,7 +115,7 @@ class TestDummyGameFailures:
         repair = stage.run(task_log=result["task_log"], exit_code=128)
         assert repair["level"] == "L0"
 
-    def test_cuda_oom_requires_L1(self, tmp_path):
+    def test_cuda_oom_requires_L1(self, tmp_path):  # noqa: N802
         db_path = str(tmp_path / "test.db")
         game = DummyExperimentGame(db_path=db_path)
         game.start()
@@ -132,7 +127,7 @@ class TestDummyGameFailures:
         assert repair["level"] == "L1"
         assert not repair["fixed"]
 
-    def test_unknown_error_reaches_L1(self, tmp_path):
+    def test_unknown_error_reaches_L1(self, tmp_path):  # noqa: N802
         db_path = str(tmp_path / "test.db")
         game = DummyExperimentGame(db_path=db_path)
         game.start()
@@ -184,7 +179,7 @@ class TestDummyGameWithDiagnose:
         game = DummyExperimentGame(db_path=db_path)
         game.start()
 
-        from expflow_pde.analyze import diagnose_experiment, suggest_next_params
+        from expflow_pde.analyze import suggest_next_params
 
         for i in range(3):
             result = game.step(inject_failure="none")
@@ -208,7 +203,6 @@ class TestDummyGameWithDiagnose:
         game = DummyExperimentGame(task_id="task1", db_path=db_path, seed=42)
         game.start()
 
-        from expflow_pde.analyze import suggest_next_params
 
         # Push towards ceiling
         for _ in range(10):

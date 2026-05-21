@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Third-party entry point tests for expflow CLI.
 
 Verifies the exact pip-installed user experience:
@@ -9,6 +7,8 @@ Verifies the exact pip-installed user experience:
 4. entry_point_info — basic non-clearml commands work without clearml dep
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 import sys
@@ -16,10 +16,11 @@ import tempfile
 
 import pytest
 
+# Version import before HERE — needed by entry_point tests below
+from expflow_pde import __version__ as _ver  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(HERE, ".."))
-
-from expflow_pde import __version__ as _ver
 
 
 def _built_wheel_path() -> str | None:

@@ -123,7 +123,7 @@ def auto(
         last_exp = game._db.get_experiment(game._last_exp_id)
         if last_exp and last_exp.get("result_summary"):
             summary = json.loads(last_exp["result_summary"])
-            diag = diagnose_experiment(
+            _ = diagnose_experiment(  # side effect: warms up diagnose module
                 task_id=game.task_id,
                 json_path=None,
             )

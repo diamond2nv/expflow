@@ -111,10 +111,14 @@ def validate_competition_rules(
             ``checks``: list of per-rule check dicts (name, label, value, passed, detail)
             ``metrics``: input metrics dict
     """
-    from expflow_pde.metrics import get_metric_threshold, get_registered_metrics, validate_metric_threshold
+    from expflow_pde.metrics import (
+        get_metric_threshold,
+        get_registered_metrics,
+        validate_metric_threshold,
+    )
 
     checks: list[dict[str, Any]] = []
-    registered = get_registered_metrics()
+    _ = get_registered_metrics()  # trigger lazy import for side effect
 
     rule_defs: list[tuple[str, str]] = [
         ("seg_total", "Primary score"),

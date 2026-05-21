@@ -252,7 +252,7 @@ def compute_rel_mse(
     Returns:
         Per-sample relative MSE: shape (N,) tensor.
     """
-    torch = _get_torch()
+    _ = _get_torch()  # ensure torch is importable (caller already passes tensors)
     N = pred.size(0)
     pred_flat = pred.reshape(N, -1)
     target_flat = target.reshape(N, -1)

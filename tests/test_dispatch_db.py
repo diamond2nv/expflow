@@ -2,9 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for expflow_pde.dispatch_db — SQLite-backed experiment dispatch database."""
 
-import json
 import os
-import time
 
 import pytest
 
@@ -28,7 +26,7 @@ class TestConnectionManagement:
     def test_creates_db_file(self, tmp_path):
         db_path = os.path.join(str(tmp_path), "fresh.db")
         assert not os.path.isfile(db_path)
-        db = DispatchDB(db_path)
+        _ = DispatchDB(db_path)
         assert os.path.isfile(db_path)
 
     def test_wal_mode_enabled(self, db):
@@ -212,7 +210,7 @@ class TestExperimentCRUD:
         assert results == []
 
     def test_query_recent_ordered(self, db):
-        e1 = db.register_experiment(script="a.py")
+        _ = db.register_experiment(script="a.py")
         e2 = db.register_experiment(script="b.py")
         results = db.query_recent()
         assert len(results) == 2

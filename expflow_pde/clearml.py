@@ -113,10 +113,11 @@ def get_task_scalars(task_id: str) -> dict[str, Any] | None:
     task = task_cls.get_task(task_id=task_id)
 
     # Read scalars from the task's last metrics event
+    _task_models = None
     try:
-        models = task.models.get("output", [])
+        _task_models = task.models.get("output", [])
     except AttributeError:
-        models = []
+        _task_models = []
 
     # Try reading scalars directly from the task
     scalars: dict[str, Any] = {}

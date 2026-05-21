@@ -117,7 +117,7 @@ class TestRepairStageProperties:
     def test_history_tracks_attempts(self):
         stage = RepairStage()
         log = "ModuleNotFoundError: No module named 'h5py'"
-        result = stage.run(log, 1)
+        _ = stage.run(log, 1)
         assert len(stage.history) >= 1
 
     def test_fixed_property(self):

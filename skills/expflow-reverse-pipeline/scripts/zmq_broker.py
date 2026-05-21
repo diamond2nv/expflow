@@ -35,10 +35,9 @@ Design decisions:
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import zmq
 
@@ -316,7 +315,7 @@ class Subscriber:
         """Keep events before `since` + last 100 lines (prevent unbounded growth)."""
         try:
             lines = FALLBACK_FILE.read_text(encoding="utf-8").splitlines()
-            before = [l for l in lines if json.loads(l).get("ts", 0) < since]
+            before = [ln for ln in lines if json.loads(ln).get("ts", 0) < since]
             after = lines[-100:] if len(lines) > 100 else []
             FALLBACK_FILE.write_text(
                 "\n".join(before + after) + "\n",
