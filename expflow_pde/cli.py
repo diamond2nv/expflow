@@ -225,6 +225,26 @@ def _lazy_register_iterate():
 _ = _lazy_register_iterate()
 _ = _lazy_register_dispatch()
 
+
+def _lazy_register_dummy():
+    """Lazily import and register dummy game sub-command group."""
+    from expflow_pde.dummy.cli import dummy_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "dummy":
+            return dummy_app
+
+    app.add_typer(
+        dummy_app,
+        name="dummy",
+        help="Dummy experiment game for testing diagnose→repair→iterate cycle",
+        hidden=True,
+    )
+    return dummy_app
+
+
+_ = _lazy_register_dummy()
+
 # ── Top-level commands ──
 
 

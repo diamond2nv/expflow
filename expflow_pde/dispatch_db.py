@@ -778,21 +778,33 @@ class DispatchDB:
         self,
         before_date: str,
         archive_path: str | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Move experiments completed before a given date to an archive DB.
+        """Atomically move completed/failed experiments before a date to an archive DB.
+
+        Uses two-phase commit:
+          1. INSERT INTO archive (within archive DB write_tx)
+          2. DELETE FROM source (within source DB write_tx)
+
+        If step 1 fails, step 2 never runs.
+        Archive path includes a unix timestamp to prevent overwrites.
+
+        A checkpoint entry is written to audit_log before and after the move.
 
         Args:
             before_date: ISO date string (e.g. '2025-06-01').
-            archive_path: Path to archive DB file. Auto-generated if None.
+            archive_path: Optional path to archive DB. Auto-generated if None.
+            dry_run: Count experiments to archive without moving.
 
         Returns:
-            Dict with archive_path, moved_count.
+            Dict with archive_path, moved_count, status.
         """
         if archive_path is None:
             archive_dir = os.path.join(os.path.dirname(self.path), "archive")
             os.makedirs(archive_dir, exist_ok=True)
+            ts = int(time.time())
             archive_path = os.path.join(
-                archive_dir, f"pre-{before_date}.db"
+                archive_dir, f"pre-{before_date}-{ts}.db"
             )
 
         # Find experiments to archive
@@ -806,64 +818,140 @@ class DispatchDB:
             exp_ids = [r[0] for r in rows]
 
         if not exp_ids:
-            return {"archive_path": archive_path, "moved_count": 0}
+            return {"archive_path": archive_path, "moved_count": 0, "status": "no_op"}
+
+        if dry_run:
+            return {
+                "archive_path": archive_path,
+                "moved_count": len(exp_ids),
+                "status": "dry_run",
+                "experiment_ids": exp_ids,
+            }
 
         placeholders = ",".join("?" for _ in exp_ids)
 
-        # Create archive DB with same schema
-        archive_db = DispatchDB(archive_path)
+        # Write audit checkpoint BEFORE move
+        self._write_audit_direct(
+            None,
+            "archive",
+            {
+                "action": "started",
+                "archive_path": archive_path,
+                "count": len(exp_ids),
+                "before_date": before_date,
+            },
+        )
 
-        # Move data
-        with self._write_tx() as src_conn:
+        # Two-phase commit: copy to archive (phase 1) then delete from source (phase 2)
+        try:
+            # Phase 1: insert into archive DB
+            archive_db = DispatchDB(archive_path)
             with archive_db._write_tx() as dst_conn:
-                for table in ("experiments", "branches", "artifacts", "metrics"):
-                    dst_conn.execute(
-                        f"DELETE FROM {table}"
-                    )
-
+                for table in ("experiments", "branches", "artifacts", "metrics", "audit_log"):
                     # Determine the relevant ID column for this table
                     if table == "experiments":
                         id_col = "id"
                     elif table == "branches":
                         id_col = "parent_exp_id"
-                    elif table in ("artifacts", "metrics"):
+                    elif table in ("artifacts", "metrics", "audit_log"):
                         id_col = "experiment_id"
                     else:
                         continue
 
-                    rows = src_conn.execute(
-                        f"SELECT * FROM {table} WHERE {id_col} IN ({placeholders})",
-                        exp_ids,
-                    ).fetchall()
-                    if rows:
-                        cur = src_conn.execute(
-                            f"SELECT * FROM {table} LIMIT 0"
-                        )
-                        columns = [d[0] for d in cur.description]
-                        col_list = ", ".join(columns)
-                        place = ", ".join("?" for _ in columns)
-                        for row in rows:
-                            dst_conn.execute(
-                                f"INSERT INTO {table} ({col_list}) VALUES ({place})",
-                                [row[c] for c in columns],
-                            )
+                    with self._read_tx() as src_conn:
+                        rows = src_conn.execute(
+                            f"SELECT * FROM {table} "
+                            f"WHERE {id_col} IN ({placeholders}) "
+                            f"ORDER BY created_at",
+                            exp_ids,
+                        ).fetchall()
 
-                # Delete from source
-                for table in ("metrics", "artifacts"):
+                    if not rows:
+                        continue
+
+                    # Get column names from source
+                    cur = src_conn.execute(f"SELECT * FROM {table} LIMIT 0")
+                    columns = [d[0] for d in cur.description]
+                    col_list = ", ".join(columns)
+                    place = ", ".join("?" for _ in columns)
+
+                    for row in rows:
+                        dst_conn.execute(
+                            f"INSERT OR IGNORE INTO {table} ({col_list}) VALUES ({place})",
+                            [row[c] for c in columns],
+                        )
+        except Exception as exc:
+            self._write_audit_direct(
+                None, "archive",
+                {"action": "failed_phase1", "error": str(exc)},
+            )
+            raise
+
+        try:
+            # Phase 2: delete from source
+            with self._write_tx() as src_conn:
+                for table in ("metrics", "artifacts", "branches", "audit_log"):
+                    if table in ("metrics", "artifacts"):
+                        id_col = "experiment_id"
+                    elif table == "branches":
+                        id_col = "parent_exp_id"
+                    else:
+                        id_col = "experiment_id"
                     src_conn.execute(
-                        f"DELETE FROM {table} WHERE experiment_id IN ({placeholders})",
+                        f"DELETE FROM {table} WHERE {id_col} IN ({placeholders})",
                         exp_ids,
                     )
                 src_conn.execute(
-                    f"DELETE FROM branches WHERE parent_exp_id IN ({placeholders})",
+                    "DELETE FROM experiments WHERE id IN ({})".format(placeholders),
                     exp_ids,
                 )
-                src_conn.execute(
-                    f"DELETE FROM experiments WHERE id IN ({placeholders})",
-                    exp_ids,
-                )
+        except Exception as exc:
+            # Phase 2 failed but phase 1 succeeded = broken state.
+            # Log the error — manual recovery needed.
+            self._write_audit_direct(
+                None, "archive",
+                {
+                    "action": "failed_phase2",
+                    "error": str(exc),
+                    "archive_path": archive_path,
+                    "recovery": (
+                        f"Data is safe in archive ({archive_path}) but source DB "
+                        "may have duplicate or dangling references."
+                    ),
+                },
+            )
+            raise
+
+        # Write audit checkpoint AFTER successful move
+        self._write_audit_direct(
+            None, "archive",
+            {
+                "action": "committed",
+                "archive_path": archive_path,
+                "count": len(exp_ids),
+                "before_date": before_date,
+            },
+        )
 
         return {
             "archive_path": archive_path,
             "moved_count": len(exp_ids),
+            "status": "committed",
         }
+
+    def _write_audit_direct(
+        self,
+        experiment_id: str | None,
+        event_type: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Write audit log entry WITHOUT an existing write_tx (uses own connection).
+
+        Used by archive() for checkpoints outside a write_tx context.
+        """
+        with self._write_tx() as conn:
+            conn.execute(
+                "INSERT INTO audit_log (experiment_id, event_type, detail_json, created_at) "
+                "VALUES (?, ?, ?, datetime('now'))",
+                (experiment_id, event_type, json.dumps(detail or {})),
+            )

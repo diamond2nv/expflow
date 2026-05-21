@@ -3,19 +3,20 @@
 """expflow repair — RepairStage: auto-fix failed clearml experiments.
 
 Three-level repair escalation:
-    L0 — Rule engine (0 token, pure Python). Matches ~80% of common failures.
-    L1 — Fast Hermes-style fix: extract traceback, patch code, retry.
-    L2 — Reflection subagent: deep analysis (spawns delegate_task for context).
+    L0 — Rule engine (0 token, pure Python). Matches common failures.
+    L1 — Traceback extraction + error localization (fixed=False, Hermes patch).
+    L2 — Reflection subagent (needs enable_reflection=True) or explicit needs_human.
 
-Each repair creates a child experiment in the experiment tree, so the full
-repair history is auditable via branches/audit_log tables.
+P0 fix: L1 never claims "fixed" — it only provides structured error context.
+P0 fix: L2 with enable_reflection=False returns needs_human=True instead of
+silently ending repair without actionable output.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 from typing import Any
 
 from expflow_pde.repair_rules import match_first
@@ -37,6 +38,10 @@ class RepairStage:
         stage = RepairStage()
         result = stage.run(task_log="...", exit_code=1)
         # -> {"fixed": True, "level": "L0", "action": "...", ...}
+
+    L0 may return "fixed": True (rule matched, auto-fix suggestion).
+    L1 always returns "fixed": False (Hermes must apply the patch).
+    L2 with enable_reflection=True spawns reflection; False returns needs_human.
     """
 
     def __init__(
@@ -73,21 +78,46 @@ class RepairStage:
             self._repair_history.append(l0_result)
             return self._build_result("L0", l0_result)
 
-        # L1: Fast Hermes-style fix (always attempts, records findings)
+        # L1: Traceback extraction (always records findings)
         l1_result = self._try_l1(task_log, exit_code)
         self._repair_history.append(l1_result)
 
-        # L2: Reflection subagent (only if enabled AND L1 didn't already fix)
-        if enable_reflection and not l1_result["fixed"]:
+        # L1 with exc_info means Hermes can act on it — mark as L1 even if not fixed
+        has_exc_info = (
+            l1_result.get("exc_type") and l1_result.get("exc_type") != "Unknown"
+        ) or exit_code != 0
+
+        # L2: Reflection subagent (only if enabled)
+        if enable_reflection:
             l2_result = self._try_l2(task_log, exit_code)
+            self._repair_history.append(l2_result)
             return self._build_result("L2", l2_result)
 
-        if l1_result.get("attempts", 0) > 0:
-            return self._build_result("L1", l1_result)
+        # L2 disabled — return what L1 found
+        if has_exc_info:
+            return self._build_result(
+                "L1",
+                {
+                    "fixed": False,
+                    "needs_human": True,
+                    "action": (
+                        f"L1 identified {l1_result.get('exc_type', 'error')} at "
+                        f"{l1_result.get('file', '?')}:{l1_result.get('line', '?')}. "
+                        "Enable --repair-reflection for L2 deep analysis or fix manually."
+                    ),
+                    "exc_type": l1_result.get("exc_type", "Unknown"),
+                    "file": l1_result.get("file"),
+                    "line": l1_result.get("line"),
+                },
+            )
 
         return self._build_result(
-            "none",
-            {"action": "No matching repair rule found", "fixed": False},
+            "L1",
+            {
+                "action": "No matching repair rule found. No traceback captured.",
+                "fixed": False,
+                "needs_human": True,
+            },
         )
 
     @property
@@ -106,25 +136,22 @@ class RepairStage:
         """Try L0 rule engine — 0 token, pure Python."""
         suggestion = match_first(task_log, exit_code)
         if suggestion:
+            needs_user = suggestion.get("needs_user_action", False)
             return {
                 "level": "L0",
                 "matched": True,
-                "fixed": not suggestion.get("needs_user_action", False),
+                "fixed": not needs_user,
                 "rule": suggestion.get("rule", "?"),
                 "action": suggestion.get("action", ""),
                 "confidence": suggestion.get("confidence", 0.0),
-                "needs_user_action": suggestion.get("needs_user_action", False),
+                "needs_user_action": needs_user,
             }
         return {"level": "L0", "matched": False, "fixed": False, "action": "No rule matched"}
 
-    # ── L1: Fast Hermes-style fix ──
+    # ── L1: Traceback extraction (never claims fixed) ──
 
     def _try_l1(self, task_log: str, exit_code: int) -> dict[str, Any]:
-        """Try L1 quick fix: extract traceback, identify error location.
-
-        L1 is a scaffold for Hermes to patch code. It identifies the error
-        location from the traceback and returns structured context.
-        """
+        """Extract traceback, identify error location — no auto-fix applied."""
         # Extract traceback (last 50 lines)
         lines = task_log.split("\n")
         tb_lines: list[str] = []
@@ -141,8 +168,11 @@ class RepairStage:
             return {
                 "level": "L1",
                 "fixed": False,
-                "attempts": 1,
-                "action": "No traceback found in log. Cannot auto-fix without stack trace.",
+                "action": "No traceback found in log. Cannot localize error.",
+                "exc_type": "Unknown",
+                "exc_message": "",
+                "file": "",
+                "line": 0,
             }
 
         # Identify the exception type
@@ -165,57 +195,30 @@ class RepairStage:
         last_line = 0
         for line in reversed(tb_lines):
             if line.strip().startswith("File "):
-                # File "/path/to/file.py", line 42, in function_name
-                import re
                 match = re.search(r'File "(.+?)", line (\d+)', line)
                 if match:
                     last_file = match.group(1)
                     last_line = int(match.group(2))
                 break
 
-        attempts = 0
-        while attempts < self._max_l1_attempts:
-            attempts += 1
-            self._repair_history.append({
-                "level": "L1",
-                "attempt": attempts,
-                "action": (
-                    f"Identified {exc_type} at {last_file}:{last_line}. "
-                    f"Hermes can patch: read_file, fix, git commit, retry."
-                ),
-                "exc_type": exc_type,
-                "exc_message": exc_message,
-                "file": last_file,
-                "line": last_line,
-            })
+        return {
+            "level": "L1",
+            "fixed": False,
+            "needs_human": True,
+            "action": (
+                f"L1 extracted {exc_type} at {last_file}:{last_line}. "
+                "Hermes should read_file, apply patch, then retry."
+            ),
+            "exc_type": exc_type,
+            "exc_message": exc_message,
+            "file": last_file,
+            "line": last_line,
+        }
 
-        if attempts > 0:
-            return {
-                "level": "L1",
-                "fixed": False,  # L1 needs Hermes to actually apply the patch
-                "attempts": attempts,
-                "action": (
-                    f"Identified {exc_type} at {last_file}:{last_line}. "
-                    "Ready for Hermes to apply patch and retry."
-                ),
-                "exc_type": exc_type,
-                "exc_message": exc_message,
-                "file": last_file,
-                "line": last_line,
-            }
-
-        return {"level": "L1", "fixed": False, "action": "L1 fix not attempted"}
-
-    # ── L2: Reflection subagent ──
+    # ── L2: Reflection subagent────
 
     def _try_l2(self, task_log: str, exit_code: int) -> dict[str, Any]:
-        """Try L2 reflection: prepare context for delegate_task subagent.
-
-        This is a scaffold: it structures the failure context so Hermes
-        (the caller) can spawn a reflection subagent with it.
-        Subagent output is a fix PLAN — not direct code changes.
-        """
-        # Extract key context
+        """Prepare context for L2 reflection."""
         tb_lines: list[str] = []
         for line in task_log.split("\n"):
             if "Traceback" in line or "Error" in line or "File " in line:
@@ -227,10 +230,8 @@ class RepairStage:
             "level": "L2",
             "fixed": False,
             "action": (
-                "Context prepared for L2 reflection. "
-                "Hermes should spawn a delegate_task subagent with the "
-                "failure context, wiki knowledge, and clearml task metadata. "
-                "Subagent output: fix plan (files to patch, changes to make)."
+                "L2 context prepared. Hermes should spawn a delegate_task subagent "
+                "with failure context + wiki knowledge. Subagent produces a fix plan."
             ),
             "context_length": len(task_log),
             "tb_snippet": tb_lines[:20],
@@ -253,9 +254,12 @@ class RepairStage:
             "fixed": self._fixed,
             "level": level,
             "action": detail.get("action", ""),
+            "needs_human": detail.get("needs_human", False),
             "attempts": len(self._repair_history),
             "history": list(self._repair_history),
-            "error": None if self._fixed else "Repair attempted but unsuccessful",
+            "error": None if self._fixed else (
+                detail.get("action", "Repair attempted but unsuccessful")
+            ),
         }
 
     def to_json(self) -> str:

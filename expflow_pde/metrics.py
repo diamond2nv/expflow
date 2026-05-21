@@ -5,17 +5,19 @@
 The central metric registry is ``STANDARD_METRICS`` (dict), which maps
 metric names to their metadata (type, group, higher_is_better).
 
-Phase 12 enhancements:
-- Added PDEBench 6-metric suite + competition score metrics
-- Added ``compute_pdebench_metrics()`` — wraps PDEBench's metric_func()
+P0 fix: torch import is now lazy (function-level) so the module-level
+registry (STANDARD_METRICS, get_registered_metrics, validate_metric_threshold)
+works WITHOUT torch installed. Only compute_pdebench_metrics() and
+compute_rel_mse() require torch — they import it internally.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger("expflow")
 
@@ -60,7 +62,7 @@ _THRESHOLDS: dict[str, float] = {
 }
 
 
-# ── Public API ──
+# ── Public API (zero torch imports needed) ──
 
 
 def get_registered_metrics() -> dict[str, dict[str, Any]]:
@@ -149,12 +151,18 @@ def get_metric_threshold(metric_name: str) -> float | None:
     return _THRESHOLDS.get(metric_name)
 
 
-# ── PDEBench Metric Suite ──
+# ── Torch-dependent functions (import torch internally) ──
+
+
+def _get_torch():
+    """Lazy-load torch — only imported when compute functions are called."""
+    import torch
+    return torch
 
 
 def compute_pdebench_metrics(
-    pred: torch.Tensor,
-    target: torch.Tensor,
+    pred: "torch.Tensor",
+    target: "torch.Tensor",
     initial_step: int = 10,
     Lx: float = 1.0,
     Ly: float = 1.0,
@@ -175,18 +183,12 @@ def compute_pdebench_metrics(
     - ``val_bd_err`` — Boundary error
     - ``val_fourier_{low,mid,high}`` — Fourier-domain error by frequency band
 
-    Args:
-        pred: Predicted tensor. Shape (N, *spatial, T, C).
-        target: Target tensor. Same shape as pred.
-        initial_step: Number of initial context steps to exclude from metric
-                      computation (default 10 — standard FNO rollout).
-        Lx, Ly, Lz: Domain lengths for Fourier normalisation.
-        iLow, iHigh: Fourier band boundaries (low < iLow, mid iLow-iHigh, high > iHigh).
-
-    Returns:
-        Dict mapping expflow metric names to scalar float values.
+    NOTE: Requires torch. Will raise ModuleNotFoundError if torch is not
+    installed.
     """
     from pdebench.models.metrics import metric_func as pdebench_metric_func
+
+    torch = _get_torch()
 
     result = pdebench_metric_func(
         pred,
@@ -228,16 +230,19 @@ def compute_pdebench_metrics(
 
 
 def compute_rel_mse(
-    pred: torch.Tensor,
-    target: torch.Tensor,
+    pred: "torch.Tensor",
+    target: "torch.Tensor",
     eps: float = 1e-7,
-) -> torch.Tensor:
+) -> "torch.Tensor":
     """Compute relative MSE (Rel-MSE) as used in PDE competition scoring.
 
     ``rel_mse = MSE(pred, target) / (MSE(0, target) + eps)``
     where MSE is taken over all non-batch dimensions.
 
     This is the primary competition scoring metric.
+
+    NOTE: Requires torch. Will raise ModuleNotFoundError if torch is not
+    installed.
 
     Args:
         pred: Predicted tensor, shape (N, *dims).
@@ -247,6 +252,7 @@ def compute_rel_mse(
     Returns:
         Per-sample relative MSE: shape (N,) tensor.
     """
+    torch = _get_torch()
     N = pred.size(0)
     pred_flat = pred.reshape(N, -1)
     target_flat = target.reshape(N, -1)

@@ -24,7 +24,61 @@ from expflow_pde.equations import (
     list_equations_for_task,
 )
 
-# ── Task metadata — loaded from external YAML ──
+# ── Default thresholds per task ──
+# Loaded from task_meta.yaml, fallback to these defaults.
+_DEFAULT_DIAGNOSE_THRESHOLDS: dict[str, dict[str, float]] = {
+    "task1": {
+        "ceiling_seg1_high": 70.0,
+        "ceiling_seg1_seg2_gap": 10.0,
+        "ceiling_seg3_ratio": 0.7,
+        "mid_term_gap": 25.0,
+        "long_term_seg3_low": 35.0,
+        "long_term_seg3_seg2_ratio": 0.6,
+        "short_term_seg1_low": 70.0,
+        "dist_shift_max_seg": 40.0,
+        "dist_shift_mse_high": 0.1,
+    },
+    "task2": {
+        "ceiling_seg1_high": 50.0,
+        "ceiling_seg1_seg2_gap": 8.0,
+        "ceiling_seg3_ratio": 0.6,
+        "mid_term_gap": 20.0,
+        "long_term_seg3_low": 25.0,
+        "long_term_seg3_seg2_ratio": 0.5,
+        "short_term_seg1_low": 50.0,
+        "dist_shift_max_seg": 30.0,
+        "dist_shift_mse_high": 0.1,
+    },
+    "task3": {
+        "ceiling_seg1_high": 20.0,
+        "ceiling_seg1_seg2_gap": 5.0,
+        "ceiling_seg3_ratio": 0.5,
+        "mid_term_gap": 15.0,
+        "long_term_seg3_low": 10.0,
+        "long_term_seg3_seg2_ratio": 0.4,
+        "short_term_seg1_low": 20.0,
+        "dist_shift_max_seg": 15.0,
+        "dist_shift_mse_high": 0.1,
+    },
+}
+
+
+def _get_diagnose_thresholds(task_id: str = "task1") -> dict[str, float]:
+    """Load diagnose thresholds from task_meta.yaml, fallback to defaults."""
+    meta = _load_task_meta()
+    task_meta = meta.get(task_id, {})
+    task_ths = task_meta.get("diagnose_thresholds", {})
+    defaults = _DEFAULT_DIAGNOSE_THRESHOLDS.get(task_id, _DEFAULT_DIAGNOSE_THRESHOLDS["task1"])
+    merged = dict(defaults)
+    merged.update(task_ths)
+    return merged
+
+
+_FALLBACK_SEG1_LOW: dict[str, float] = {
+    "task1": 60.0,
+    "task2": 40.0,
+    "task3": 10.0,
+}
 
 _TASK_META_YAML: str | None = None
 
@@ -226,29 +280,62 @@ def _compute_convergence_estimate(
         decay_ratios = [
             gains[i + 1] / max(1e-8, gains[i]) for i in range(len(gains) - 1)
         ]
-        # Take minimum to avoid overly optimistic projections
-        gain_decay = min(decay_ratios)
+        # Clamp decay to [0, 1) — negative or >1 values are unphysical for
+        # the geometric series formula a / (1 - r)
+        filtered_ratios = [
+            max(0.0, min(r, 0.99)) for r in decay_ratios if r > 0
+        ]
+        if filtered_ratios:
+            gain_decay = min(filtered_ratios)
+        else:
+            gain_decay = 0.5
 
-    last_gain = gains[-1]
+    last_gain = gains[-1] if gains else 0.0
+
+    # If last gain is negative or near-zero, we're already at ceiling
+    if last_gain <= 1e-6:
+        projected = round(seg_history[-1], 1)
+        conf = "high"
+        return _convergence_result(projected, seg_history, conf, 0.0)
+
     # Asymptotic series: last_gain * (1 + r + r^2 + ...) = last_gain / (1 - r)
-    asymptotic_gain = last_gain / max(1.0 - gain_decay, 0.1)
+    denom = max(1.0 - gain_decay, 0.1)
+    asymptotic_gain = last_gain / denom
     projected = round(seg_history[-1] + asymptotic_gain, 1)
 
-    # Confidence based on stability of decline
+    # Confidence based on stability of decline + prediction interval width
     if len(gains) >= 3:
         stable = all(
             0.3 <= gains[i + 1] / max(1e-8, gains[i]) <= 2.0
             for i in range(len(gains) - 1)
         )
-        conf: str = "high" if stable else "medium"
+        # Prediction interval: wider = lower confidence
+        pi_ratio = asymptotic_gain / max(abs(last_gain), 1.0)
+        if stable and pi_ratio <= 5.0:
+            conf = "high"
+        elif stable:
+            conf = "medium"
+        else:
+            conf = "low"
     else:
         conf = "medium"
 
+    return _convergence_result(projected, seg_history, conf, gain_decay)
+
+
+def _convergence_result(
+    projected: float,
+    seg_history: list[float],
+    confidence: str,
+    gain_decay: float,
+) -> dict[str, Any]:
+    """Build the convergence estimate result dict."""
+    last = seg_history[-1] if seg_history else 0.0
     return {
-        "optimistic": round(projected + 1, 1),
+        "optimistic": round(projected + max(1.0, max(last - projected, 0) * 0.2), 1),
         "expected": projected,
-        "conservative": round(max(projected - 2, seg_history[-1]), 1),
-        "confidence": conf,
+        "conservative": round(max(projected - 2, last), 1),
+        "confidence": confidence,
         "gain_decay": round(gain_decay, 3),
         "seg_history": seg_history,
     }
@@ -628,7 +715,7 @@ def diagnose_experiment(
     if not isinstance(total_mse, (int, float)):
         total_mse = 0.0
 
-    # ── Diagnosis rules (v2: composite + ceiling-aware) ──
+    # ── Diagnosis rules (v2: composite + ceiling-aware, task-aware) ──
     diagnosis: list[str] = []
     degradation_pattern = "stable"
 
@@ -638,13 +725,27 @@ def diagnose_experiment(
     s3 = float(seg3) if isinstance(seg3, (int, float)) else 0.0
     mse = float(total_mse) if isinstance(total_mse, (int, float)) else 0.0
 
-    # Detect ceiling: Seg1 < 70 but Seg2 is close and Seg3 not collapsing
+    # Load task-aware thresholds
+    task = task_id or "task1"
+    th = _get_diagnose_thresholds(task)
+
+    ceiling_seg1_high = th["ceiling_seg1_high"]
+    ceiling_gap = th["ceiling_seg1_seg2_gap"]
+    ceiling_seg3_ratio = th["ceiling_seg3_ratio"]
+    mid_gap = th["mid_term_gap"]
+    long_seg3_low = th["long_term_seg3_low"]
+    long_seg3_seg2_ratio = th["long_term_seg3_seg2_ratio"]
+    short_seg1_low = th["short_term_seg1_low"]
+    dist_max_seg = th["dist_shift_max_seg"]
+    dist_mse_high = th["dist_shift_mse_high"]
+
+    # Detect ceiling: Seg1 below threshold but Seg2 close and Seg3 not collapsing
     is_ceiling = (
-        s1 < 70 and s2 > 0 and s3 > 0
-        and (s1 - s2) < 10
-        and s3 > s2 * 0.7
+        s1 < ceiling_seg1_high and s2 > 0 and s3 > 0
+        and (s1 - s2) < ceiling_gap
+        and s3 > s2 * ceiling_seg3_ratio
     )
-    is_short_term = s1 < 70 and not is_ceiling
+    is_short_term = s1 < short_seg1_low and not is_ceiling
 
     if is_ceiling:
         diagnosis.append(
@@ -659,14 +760,14 @@ def diagnose_experiment(
 
     # Medium-term — detect independently (not mutually exclusive)
     mid_term_detected = (
-        s1 > 0 and s2 > 0 and (s1 - s2) > 25
+        s1 > 0 and s2 > 0 and (s1 - s2) > mid_gap
     )
     if mid_term_detected:
-        diagnosis.append("Medium-term stability degraded (Seg2 drops >25 from Seg1)")
+        diagnosis.append("Medium-term stability degraded (Seg2 drops >%d from Seg1)" % int(mid_gap))
 
     # Long-term — detect independently
     long_term_detected = (
-        s3 < 35 or (s2 > 0 and s3 < s2 * 0.6)
+        s3 < long_seg3_low or (s2 > 0 and s3 < s2 * long_seg3_seg2_ratio)
     )
     if long_term_detected:
         diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
@@ -689,8 +790,8 @@ def diagnose_experiment(
     # Distribution shift (independent check)
     if (
         s1 > 0 and s2 > 0 and s3 > 0
-        and max(s1, s2, s3) < 40
-        and mse < 0.1
+        and max(s1, s2, s3) < dist_max_seg
+        and mse < dist_mse_high
     ):
         diagnosis.append(
             "Consistent underperformance — possible IC distribution mismatch"
@@ -745,7 +846,7 @@ def suggest_next_params(
         isinstance(seg3, (int, float))
         and seg3 < 30
         and isinstance(seg1, (int, float))
-        and seg1 > 60
+        and seg1 > _FALLBACK_SEG1_LOW.get(task_id, 60)
     ):
         current_modes = int(hp.get("n_modes", 12))
         suggestions["n_modes"] = min(current_modes + 4, 24)
