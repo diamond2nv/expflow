@@ -175,6 +175,22 @@ _ = _lazy_register_analyze()
 _ = _lazy_register_pipeline()
 
 
+def _lazy_register_dispatch():
+    """Lazily import and register dispatch sub-command group."""
+    from expflow_pde.cli_dispatch import dispatch_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "dispatch":
+            return dispatch_app
+
+    app.add_typer(
+        dispatch_app,
+        name="dispatch",
+        help="Manage local experiment dispatch database (SQLite)",
+    )
+    return dispatch_app
+
+
 def _lazy_register_hypothesis():
     from expflow_pde.cli_hypothesis import hypothesis_app
 
@@ -207,6 +223,7 @@ def _lazy_register_iterate():
 
 
 _ = _lazy_register_iterate()
+_ = _lazy_register_dispatch()
 
 # ── Top-level commands ──
 

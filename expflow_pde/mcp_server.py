@@ -30,7 +30,7 @@ def serve() -> None:
     _register_audit_tools(mcp)
     _register_system_tools(mcp)
 
-    print("  [OK] FastMCP server with 18 tools")
+    print("  [OK] FastMCP server with 24 tools")
     mcp.run(transport="stdio")
 
 
@@ -332,3 +332,49 @@ def _register_system_tools(mcp: "FastMCP") -> None:
             project_name=project,
             max_results=max_results,
         )
+
+    @mcp.tool()
+    def exp_db_stats() -> dict:
+        """Get dispatch database statistics."""
+        from expflow_pde.dispatch_db import DispatchDB
+
+        return DispatchDB().stats()
+
+    @mcp.tool()
+    def exp_db_tree(root_id: str) -> dict:
+        """Get experiment tree structure from dispatch database."""
+        from expflow_pde.dispatch_db import DispatchDB
+
+        return DispatchDB().get_experiment_tree(root_id)
+
+    @mcp.tool()
+    def exp_db_archive(before_date: str) -> dict:
+        """Archive old experiments from dispatch database."""
+        from expflow_pde.dispatch_db import DispatchDB
+
+        return DispatchDB().archive(before_date)
+
+    @mcp.tool()
+    def exp_db_audit_log(
+        experiment_id: str | None = None,
+        event_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Query audit log entries."""
+        from expflow_pde.dispatch_db import DispatchDB
+
+        return DispatchDB().get_audit_log(
+            experiment_id=experiment_id,
+            event_type=event_type,
+            limit=limit,
+        )
+
+    @mcp.tool()
+    def exp_db_metrics(
+        experiment_id: str,
+        metric_name: str | None = None,
+    ) -> list[dict]:
+        """Get metrics for an experiment from dispatch database."""
+        from expflow_pde.dispatch_db import DispatchDB
+
+        return DispatchDB().get_metrics(experiment_id, name=metric_name)
