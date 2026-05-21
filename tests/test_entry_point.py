@@ -174,7 +174,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert ver_result.returncode == 0, f"version failed: {ver_result.stderr}"
-            assert ver_result.stdout.strip() == "expflow v0.5.0"
+            assert ver_result.stdout.strip() == "expflow v0.6.0"
 
             # info command should work
             info_result = subprocess.run(
