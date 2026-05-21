@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import typer
+
+logger = logging.getLogger("expflow_pde.cli_pipeline")
 
 pipeline_app = typer.Typer(
     name="pipeline",
@@ -130,7 +133,38 @@ def submit_cmd(
     _print_result(result, wait, timeout)
 
     if repair and wait:
-        _maybe_repair_pipeline(result, repair_reflection, queue, project, repair_output)
+        max_retries = 2
+        for retry_attempt in range(max_retries):
+            repair_result = _maybe_repair_pipeline(
+                result, repair_reflection, queue, project, repair_output
+            )
+            if not repair_result:
+                break
+            if repair_result.get("fixed") and repair_result.get("level") != "L2":
+                if retry_attempt < max_retries - 1:
+                    print(f"  Repair:   re-submitting (attempt {retry_attempt + 1}/{max_retries})...")
+                    ep = ExperimentPipeline(
+                        project=project,
+                        queue=queue,
+                        docker=docker,
+                        abort_on_failure=abort_on_failure,
+                    )
+                    result = ep.train_val_submit(
+                        train_script=train_script,
+                        train_params=train_params if train_params else None,
+                        eval_script=eval_script,
+                        eval_params=eval_params if eval_params else None,
+                        pipeline_name=pipeline_name,
+                        version=version or None,
+                        execution_queue=queue,
+                        timeout=timeout if wait else None,
+                        skip_steps=skip,
+                    )
+                    _print_result(result, wait, timeout)
+                else:
+                    print(f"  Repair:   max retries reached, escalating to manual inspection")
+            else:
+                break
 
 
 # ── Mode A (full): HPO → Train → Eval ──
@@ -223,7 +257,40 @@ def submit_full_cmd(
     _print_result(result, wait, timeout)
 
     if repair and wait:
-        _maybe_repair_pipeline(result, repair_reflection, queue, project, repair_output)
+        max_retries = 2
+        for retry_attempt in range(max_retries):
+            repair_result = _maybe_repair_pipeline(
+                result, repair_reflection, queue, project, repair_output
+            )
+            if not repair_result:
+                break
+            if repair_result.get("fixed") and repair_result.get("level") != "L2":
+                if retry_attempt < max_retries - 1:
+                    print(f"  Repair:   re-submitting (attempt {retry_attempt + 1}/{max_retries})...")
+                    ep = ExperimentPipeline(
+                        project=project,
+                        queue=queue,
+                    )
+                    result = ep.train_hpo_val_submit(
+                        train_script=train_script,
+                        eval_script=eval_script,
+                        eval_params=eval_params if eval_params else None,
+                        n_trials=trials,
+                        parallel=parallel,
+                        hpo_study_name=study_name,
+                        objective_metric=metric,
+                        direction=direction,
+                        pruner=pruner,
+                        pipeline_name=pipeline_name,
+                        execution_queue=queue,
+                        timeout=timeout if wait else None,
+                        skip_steps=skip,
+                    )
+                    _print_result(result, wait, timeout)
+                else:
+                    print(f"  Repair:   max retries reached, escalating to manual inspection")
+            else:
+                break
 
 
 # ── Shared printer ──
@@ -250,35 +317,22 @@ def _print_result(result: dict[str, Any], wait: bool, timeout: float | None) -> 
 # ── Repair integration ──
 
 
-def _maybe_repair_pipeline(
-    result: dict[str, Any],
-    enable_reflection: bool,
-    queue: str,
-    project: str,
-    repair_output: str | None = None,
-) -> None:
-    """Check pipeline status and attempt repair if failed.
+# Signal exit codes from clearml-agent or OS
+_SIGNAL_CODES: dict[int, str] = {
+    134: "SIGABRT",
+    137: "SIGKILL (OOM)",
+    139: "SIGSEGV",
+    143: "SIGTERM",
+}
+_FAILURE_KEYWORDS = ("Traceback", "Error", "Failed", "Killed")
 
-    Called after --wait completes. If the pipeline finished with errors,
-    runs RepairStage analysis and prints suggestions.
 
-    When enable_reflection=True and repair_output is set, writes the full
-    structured L2 result to a JSON file that Hermes can watch and consume
-    via the l2-repair-executor skill (spawns a delegate_task subagent).
+def _fetch_task_log(pipeline_id: str) -> tuple[str, int]:
+    """Fetch pipeline task log from clearml with fallback.
+
+    Returns:
+        (task_log, exit_code). Empty log on failure.
     """
-    status = result.get("status", "")
-    if status in ("completed", "success"):
-        print("  Repair:   no repair needed (pipeline completed successfully)")
-        return
-
-    pipeline_id = result.get("pipeline_id", "")
-    if not pipeline_id:
-        print("  Repair:   no pipeline_id — cannot check task status")
-        return
-
-    print(f"  Repair:   pipeline failed (status={status}), analyzing...")
-
-    # Try to fetch task log from clearml
     task_log = ""
     exit_code = 1
     try:
@@ -287,12 +341,107 @@ def _maybe_repair_pipeline(
         task = Task.get_task(task_id=pipeline_id)
         console = task.get_reported_console_output()
         task_log = "\n".join(console) if console else ""
-        # Check if clearml reports the actual exit code
         status_msg = getattr(task, "status", "")
-        if "failed" in str(status_msg).lower():
+        status_str = str(status_msg).lower()
+        if "failed" in status_str:
             exit_code = 1
-    except Exception:
-        pass
+        elif "killed" in status_str:
+            exit_code = 137
+    except ImportError:
+        logger.warning("clearml SDK not available — cannot fetch task log")
+    except Exception as e:
+        logger.warning("Failed to fetch clearml task log for %s: %s", pipeline_id, e)
+
+    if not task_log:
+        logger.warning("clearml returned empty log for %s — repair will have no T context", pipeline_id)
+    return task_log, exit_code
+
+
+def _task_log_valid(task_log: str) -> bool:
+    """Check if task_log has enough content for meaningful analysis."""
+    if not task_log or not task_log.strip():
+        return False
+    lowered = task_log.lower()
+    return any(kw.lower() in lowered for kw in _FAILURE_KEYWORDS)
+
+
+def _exit_code_category(exit_code: int) -> str:
+    """Categorise an exit code for repair diagnostics."""
+    if exit_code == 0:
+        return "success"
+    if exit_code == 1:
+        return "error"
+    if exit_code in _SIGNAL_CODES:
+        return f"signal ({_SIGNAL_CODES[exit_code]})"
+    return f"unknown ({exit_code})"
+
+
+def _resolve_repair_output(
+    user_path: str | None,
+    pipeline_id: str,
+) -> str | None:
+    """Resolve the repair output path with collision-safe defaults.
+
+    If user_path is given, use it directly.
+    Otherwise, generate a timestamped path under ~/.expflow/repair_pending/.
+    If the resolved path exists, append .N suffix to prevent overwrite.
+    Returns None if pipeline_id is empty (falls back to /tmp/ fallback).
+    """
+    import datetime
+    import os
+
+    if not pipeline_id:
+        return None
+
+    if user_path:
+        resolved = user_path
+    else:
+        pending_dir = os.path.expanduser("~/.expflow/repair_pending")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:22]
+        resolved = os.path.join(pending_dir, f"{pipeline_id}_{ts}.json")
+
+    # Collision detection — append .N if exists
+    base = resolved
+    counter = 0
+    while os.path.exists(resolved):
+        counter += 1
+        resolved = f"{base}.{counter}"
+    return resolved
+
+
+def _maybe_repair_pipeline(
+    result: dict[str, Any],
+    enable_reflection: bool,
+    queue: str,
+    project: str,
+    repair_output: str | None = None,
+) -> dict[str, Any] | None:
+    """Check pipeline status and attempt repair if failed.
+
+    Called after --wait completes. If the pipeline finished with errors,
+    runs RepairStage analysis and prints suggestions.
+
+    When enable_reflection=True and repair_output is set, writes the full
+    structured L2 result to a JSON file that Hermes can watch and consume
+    via the l2-repair-executor skill (spawns a delegate_task subagent).
+
+    Returns:
+        The repair_result dict on failure, or None if no repair needed.
+    """
+    status = result.get("status", "")
+    if status in ("completed", "success"):
+        print("  Repair:   no repair needed (pipeline completed successfully)")
+        return None
+
+    pipeline_id = result.get("pipeline_id", "")
+    if not pipeline_id:
+        print("  Repair:   no pipeline_id — cannot check task status")
+        return None
+
+    print(f"  Repair:   pipeline failed (status={status}), analyzing...")
+
+    # Fetch task log with fallback handling
+    task_log, exit_code = _fetch_task_log(pipeline_id)
 
     from expflow_pde.pipeline import ExperimentPipeline
 
@@ -306,14 +455,30 @@ def _maybe_repair_pipeline(
     print(f"  Repair:   level={repair_result.get('level', '?')}")
     print(f"  Fixed:    {repair_result.get('fixed', False)}")
     print(f"  Action:   {repair_result.get('action', '?')[:200]}")
+    ec_cat = _exit_code_category(exit_code)
+    print(f"  Exit:     code={exit_code} ({ec_cat})")
+    input_valid = repair_result.get("input_valid", True)
+    if not input_valid:
+        print(f"  Warning:  task_log empty or has no failure signal — repair context may be incomplete")
     if repair_result.get("history"):
         print(f"  History:  {len(repair_result['history'])} attempt(s)")
 
+    # Resolve repair_output path — default to timestamped file in repair_pending/
+    if repair_result.get("level") == "L2" and repair_result.get("input_valid", True):
+        resolved_output = _resolve_repair_output(repair_output, pipeline_id)
+    else:
+        resolved_output = None
+
     # Write structured repair output to file for Hermes L2 executor
-    if repair_output and repair_result.get("level") == "L2":
-        import json
-        import os
-        os.makedirs(os.path.dirname(repair_output) or ".", exist_ok=True)
-        with open(repair_output, "w") as f:
-            json.dump(repair_result, f, indent=2, ensure_ascii=False)
-        print(f"  L2 output: {repair_output} (awaiting Hermes subagent)")
+    if resolved_output:
+        if not repair_result.get("input_valid", True):
+            print(f"  Warning:  L2 input invalid — skipping repair_output write (use manual inspection)")
+        else:
+            import json
+            import os
+            os.makedirs(os.path.dirname(resolved_output) or ".", exist_ok=True)
+            with open(resolved_output, "w") as f:
+                json.dump(repair_result, f, indent=2, ensure_ascii=False)
+            print(f"  L2 output: {resolved_output} (awaiting Hermes subagent)")
+
+    return repair_result

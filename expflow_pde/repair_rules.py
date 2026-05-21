@@ -13,6 +13,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+# Signal exit codes that may carry useful failure context for L0 rules
+_SIGNAL_EXIT_CODES = {134, 137, 139, 143}
+
 
 # ── Rule base ──
 
@@ -63,7 +66,8 @@ class GitProjectNotFoundRule(RepairRule):
     name = "git_project_not_found"
 
     def matches(self, task_log: str, exit_code: int) -> bool:
-        if exit_code != 128:
+        # exit_code 128 = git remote error; also accept signal codes
+        if exit_code not in {128, 134, 137, 139, 143}:
             return False
         lower_log = task_log.lower()
         return "project not found" in lower_log or "could not read" in lower_log \
@@ -101,7 +105,7 @@ class ModuleNotFoundRule(RepairRule):
     name = "module_not_found"
 
     def matches(self, task_log: str, exit_code: int) -> bool:
-        if exit_code != 1:
+        if exit_code not in {1, 134, 137, 139, 143}:
             return False
         lower_log = task_log.lower()
         return "modulenotfounderror" in lower_log or "importerror" in lower_log
@@ -155,7 +159,7 @@ class PipConflictRule(RepairRule):
     name = "pip_version_conflict"
 
     def matches(self, task_log: str, exit_code: int) -> bool:
-        if exit_code != 1:
+        if exit_code not in {1, 134, 137, 139, 143}:
             return False
         lower_log = task_log.lower()
         return "pip" in lower_log and ("conflict" in lower_log or "resolution" in lower_log)

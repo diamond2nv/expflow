@@ -27,6 +27,37 @@ logger = logging.getLogger("expflow_pde.repair")
 
 MAX_L1_ATTEMPTS = 2  # Max L1 quick-fix attempts before escalating to L2
 
+# Signal exit codes from clearml-agent or OS
+SIGNAL_CODES: dict[int, str] = {
+    134: "SIGABRT",
+    137: "SIGKILL (OOM)",
+    139: "SIGSEGV",
+    143: "SIGTERM",
+}
+
+# ── Helpers ──
+
+_FAILURE_KEYWORDS = ("Traceback", "Error", "Failed", "Killed")
+
+
+def _log_has_failure_signal(task_log: str) -> bool:
+    """Check if the task log contains any failure signal for analysis."""
+    if not task_log or not task_log.strip():
+        return False
+    lowered = task_log.lower()
+    return any(kw.lower() in lowered for kw in _FAILURE_KEYWORDS)
+
+
+def _exit_code_category(exit_code: int) -> str:
+    """Categorise an exit code for repair diagnostics."""
+    if exit_code == 0:
+        return "success"
+    if exit_code == 1:
+        return "error"
+    if exit_code in SIGNAL_CODES:
+        return f"signal ({SIGNAL_CODES[exit_code]})"
+    return f"unknown ({exit_code})"
+
 
 # ── RepairStage ──
 
@@ -62,8 +93,9 @@ class RepairStage:
         exit_code: int,
         enable_reflection: bool = False,
     ) -> dict[str, Any]:
-        """Run the full repair pipeline (L0 → L1 → L2)."""
+        """Run the full repair pipeline (L0 -> L1 -> L2)."""
         self._repair_history = []
+        self._last_exit_code = exit_code
 
         # Only attempt repair on non-zero exit codes
         if exit_code == 0:
@@ -165,6 +197,24 @@ class RepairStage:
                 break
 
         if not tb_lines:
+            # Signal exit codes produce no Python traceback
+            if exit_code in SIGNAL_CODES:
+                sig_name = SIGNAL_CODES[exit_code]
+                action = f"Process terminated by {sig_name} (exit code {exit_code})"
+                # Check for OOM-killer signature in log
+                if "killed" in task_log.lower() or exit_code == 137:
+                    action += " — likely OOM (out of memory)"
+                return {
+                    "level": "L1",
+                    "fixed": False,
+                    "needs_human": True,
+                    "action": action,
+                    "exc_type": sig_name,
+                    "exc_message": "",
+                    "file": "",
+                    "line": 0,
+                    "exit_code_category": _exit_code_category(exit_code),
+                }
             return {
                 "level": "L1",
                 "fixed": False,
@@ -223,6 +273,23 @@ class RepairStage:
         Returns a machine-readable dict that Hermes can consume to spawn a
         delegate_task subagent. The subagent produces a fix plan (not code).
         """
+        # Input validation — early exit if log has no useful signal
+        if not _log_has_failure_signal(task_log):
+            return {
+                "level": "L2",
+                "fixed": False,
+                "needs_human": True,
+                "input_valid": False,
+                "action": "task_log empty or contains no failure signal — subagent cannot analyze",
+                "fallback_instruction": (
+                    "Check clearml task directly: `clearml tasks <task_id>` or "
+                    "`clearml logs <task_id>` to fetch full stderr/stdout. "
+                    "The task may have failed without a Python traceback."
+                ),
+                "exit_code": exit_code,
+                "experiment_id": self._exp_id,
+            }
+
         # Extract traceback lines for context
         tb_lines: list[str] = []
         for line in task_log.split("\n"):
@@ -254,7 +321,9 @@ class RepairStage:
                     files_to_check.append(fp)
 
         # Map exception type to relevant wiki pages
-        wiki_paths = self._exc_type_to_wiki(exc_type)
+        wiki_info = self._exc_type_to_wiki(exc_type)
+        wiki_paths = wiki_info.get("paths", [])
+        wiki_source = wiki_info.get("source", "none")
 
         # Render the subagent prompt with structured context
         context = {
@@ -280,6 +349,7 @@ class RepairStage:
             "exc_message": exc_message or "",
             "files_to_check": files_to_check or [],
             "wiki_paths": wiki_paths or [],
+            "wiki_source": wiki_source,
             "tb_snippet": tb_lines[:20],
             "subagent_prompt": prompt,
             "subagent_schema": {
@@ -289,27 +359,63 @@ class RepairStage:
             },
         }
 
-    _EXC_TYPE_WIKI: dict[str, list[str]] = {
-        "ModuleNotFoundError": [
-            "~/wiki/troubleshooting/pip-dependencies.md",
-        ],
-        "torch.cuda.OutOfMemoryError": [
-            "~/wiki/troubleshooting/gpu-memory.md",
-        ],
-        "FileNotFoundError": [
-            "~/wiki/troubleshooting/data-paths.md",
-        ],
-        "git": [
-            "~/wiki/ops/ssh-keys.md",
-        ],
-        "error": [],  # unknown
-    }
+    _EXC_TYPE_WIKI: list[dict[str, Any]] = [
+        # Exact matches (highest priority)
+        {"match": "exact", "key": "ModuleNotFoundError",
+         "paths": ["~/wiki/troubleshooting/pip-dependencies.md"]},
+        {"match": "exact", "key": "torch.cuda.OutOfMemoryError",
+         "paths": ["~/wiki/troubleshooting/gpu-memory.md"]},
+        {"match": "exact", "key": "FileNotFoundError",
+         "paths": ["~/wiki/troubleshooting/data-paths.md"]},
+        # Prefix matches
+        {"match": "prefix", "key": "ImportError",
+         "paths": ["~/wiki/troubleshooting/pip-dependencies.md"]},
+        # Substring matches (for combined / clearml augmented messages)
+        {"match": "substring", "key": "CUDA out of memory",
+         "paths": ["~/wiki/troubleshooting/gpu-memory.md"]},
+        {"match": "substring", "key": "DataLoader",
+         "paths": ["~/wiki/troubleshooting/data-loader.md"]},
+        # Signal- or content-based — matched via _CLASSIFY_EXC fallback
+    ]
 
-    def _exc_type_to_wiki(self, exc_type: str) -> list[str]:
-        """Map exception type to relevant wiki page paths."""
-        for key, paths in self._EXC_TYPE_WIKI.items():
-            if key in exc_type:
-                return list(paths)
+    def _exc_type_to_wiki(self, exc_type: str) -> dict[str, Any]:
+        """Map exception type to relevant wiki page paths.
+
+        Returns dict with keys:
+            paths: list[str] — wiki file paths
+            source: str — \"exact\" | \"prefix\" | \"substring\" | \"fallback\" | \"none\"
+        """
+        if not exc_type or exc_type == "Unknown":
+            return {"paths": [], "source": "none"}
+
+        for entry in self._EXC_TYPE_WIKI:
+            if entry["match"] == "exact" and entry["key"] == exc_type:
+                return {"paths": list(entry["paths"]), "source": "exact"}
+            if entry["match"] == "prefix" and exc_type.startswith(entry["key"]):
+                return {"paths": list(entry["paths"]), "source": "prefix"}
+            if entry["match"] == "substring" and entry["key"] in exc_type:
+                return {"paths": list(entry["paths"]), "source": "substring"}
+
+        # Fallback — content-based classification for no explicit key matched
+        paths = self._CLASSIFY_EXC(exc_type)
+        if paths:
+            return {"paths": paths, "source": "fallback"}
+        return {"paths": [], "source": "none"}
+
+    @staticmethod
+    def _CLASSIFY_EXC(exc_type: str) -> list[str]:
+        """Content-based fallback classification for unmapped exception types."""
+        lower = exc_type.lower()
+        if any(kw in lower for kw in ("cuda", "out of memory", "oom")):
+            return ["~/wiki/troubleshooting/gpu-memory.md"]
+        if any(kw in lower for kw in ("killed", "signal", "sigkill", "sigterm")):
+            return ["~/wiki/troubleshooting/oom-killer.md"]
+        if any(kw in lower for kw in ("bus error", "shm", "/dev/shm")):
+            return ["~/wiki/troubleshooting/shared-memory.md"]
+        if any(kw in lower for kw in ("disk", "quota", "no space", "storage")):
+            return ["~/wiki/troubleshooting/disk-space.md"]
+        if any(kw in lower for kw in ("timeout", "time out", "deadline")):
+            return ["~/wiki/troubleshooting/timeouts.md"]
         return []
 
     def _render_l2_prompt(self, context: dict) -> str:
@@ -363,6 +469,7 @@ class RepairStage:
             "needs_human": detail.get("needs_human", False),
             "attempts": len(self._repair_history),
             "history": list(self._repair_history),
+            "exit_code_category": _exit_code_category(getattr(self, "_last_exit_code", 1)),
             "error": None if self._fixed else (
                 detail.get("action", "Repair attempted but unsuccessful")
             ),
@@ -371,9 +478,9 @@ class RepairStage:
         # so Hermes doesn't need to dig into history[]
         if level == "L2":
             for key in ("exc_type", "exc_message", "files_to_check",
-                       "wiki_paths", "tb_snippet", "subagent_prompt",
+                       "wiki_paths", "wiki_source", "tb_snippet", "subagent_prompt",
                        "subagent_schema", "exit_code", "experiment_id",
-                       "context_length"):
+                       "context_length", "input_valid"):
                 if key in detail:
                     result[key] = detail[key]
         return result

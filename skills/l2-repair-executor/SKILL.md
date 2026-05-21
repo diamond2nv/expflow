@@ -170,10 +170,11 @@ expflow pipeline submit train_task1.py --queue default \
 #   7. Hermes records to dispatch_db audit_log
 ```
 
-## Cron Job (Standalone Watcher)
+### Cron Job (Standalone Watcher)
 
 For production pipelines where Hermes may not be present at submit time,
-a cron job polls a directory for unprocessed L2 repair requests:
+a cron job polls a directory (`~/.expflow/repair_pending/`) for unprocessed
+L2 repair requests (auto-named as `{pipeline_id}_{timestamp}.json`):
 
 ```bash
 expflow cron create \

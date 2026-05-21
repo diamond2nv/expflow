@@ -170,3 +170,157 @@ class TestRepairStageEdgeCases:
         assert r1["level"] == "L0"
         assert r2["level"] == "none"
         assert r3["level"] == "L0"
+
+
+class TestRepairStageInputValidation:
+    """L2 input validation when task_log is empty or has no failure signal."""
+
+    def test_empty_log_returns_input_valid_false(self):
+        stage = RepairStage()
+        result = stage.run("", 1, enable_reflection=True)
+        assert result["level"] == "L2"
+        assert result.get("input_valid") is False
+        assert "no failure signal" in result.get("action", "").lower()
+
+    def test_whitespace_only_log_input_invalid(self):
+        stage = RepairStage()
+        result = stage.run("   \n\n  ", 1, enable_reflection=True)
+        assert result.get("input_valid") is False
+
+    def test_normal_log_still_valid(self):
+        stage = RepairStage()
+        result = stage.run("Traceback (most recent call last):\nValueError: bad", 1, enable_reflection=True)
+        assert result.get("input_valid", True) is True
+
+    def test_killed_log_contains_failure_signal(self):
+        """'Killed' should be recognized as a failure signal."""
+        from expflow_pde.repair import _log_has_failure_signal
+        assert _log_has_failure_signal("Killed")
+        assert _log_has_failure_signal("process was Killed")
+
+
+class TestRepairStageExitCodeCategory:
+    """exit_code_category should be present and correct."""
+
+    def test_exit_code_category_0(self):
+        stage = RepairStage()
+        result = stage.run("ok", 0)
+        assert result["exit_code_category"] == "success"
+
+    def test_exit_code_category_1(self):
+        stage = RepairStage()
+        result = stage.run("Error: something", 1)
+        assert result["exit_code_category"] == "error"
+
+    def test_exit_code_category_137(self):
+        stage = RepairStage()
+        result = stage.run("Killed", 137)
+        assert "signal" in result["exit_code_category"]
+
+    def test_exit_code_category_unknown(self):
+        stage = RepairStage()
+        result = stage.run("Error: weird", 99)
+        assert "unknown" in result["exit_code_category"]
+
+
+class TestRepairStageSignalExitL1:
+    """L1 should produce meaningful output for signal exit codes."""
+
+    def test_l1_signal_137_no_traceback(self):
+        stage = RepairStage()
+        result = stage.run("Killed", 137)
+        assert result["level"] == "L1"
+        action = result["action"].lower()
+        assert "sigkill" in action or "oom" in action
+
+    def test_l1_signal_139_no_traceback(self):
+        stage = RepairStage()
+        result = stage.run("Segmentation fault", 139)
+        assert result["level"] == "L1"
+        assert "sigsegv" in result["action"].lower()
+
+
+class TestRepairStageWikiMapping:
+    """Wiki mapping should use exact match over substring."""
+
+    def test_exact_match_returns_exact_source(self):
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage()
+        info = stage._exc_type_to_wiki("ModuleNotFoundError")
+        assert info["source"] == "exact"
+        assert len(info["paths"]) > 0
+
+    def test_prefix_match_import_error(self):
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage()
+        info = stage._exc_type_to_wiki("ImportError: no module named git")
+        assert info["source"] == "prefix"
+        assert "pip-dependencies" in info["paths"][0]
+        # Should NOT match SSH wiki (old bug: "git" substring in exc_type triggered ssh-keys)
+        assert "ssh-keys" not in " ".join(info["paths"])
+
+    def test_fallback_cuda_classification(self):
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage()
+        info = stage._exc_type_to_wiki("RuntimeError: CUDA error 999")
+        assert info["source"] == "fallback"
+        assert "gpu-memory" in info["paths"][0]
+
+    def test_none_for_unknown(self):
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage()
+        info = stage._exc_type_to_wiki("WeirdError: something unusual")
+        assert info["source"] == "none"
+        assert len(info["paths"]) == 0
+
+    def test_l2_propagates_wiki_source(self):
+        stage = RepairStage()
+        result = stage.run("Traceback:\nModuleNotFoundError: no module 'x'", 1, enable_reflection=True)
+        if result["level"] == "L2":
+            assert "wiki_source" in result
+            assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "none")
+
+
+
+class TestResolveRepairOutput:
+    """_resolve_repair_output collision-safe paths."""
+
+    def test_resolve_with_user_path(self, tmp_path):
+        from expflow_pde.cli_pipeline import _resolve_repair_output
+        user_path = str(tmp_path / "l2_repair.json")
+        resolved = _resolve_repair_output(user_path, "pipe_abc")
+        assert resolved == user_path
+
+    def test_resolve_without_user_path_has_timestamp(self):
+        from expflow_pde.cli_pipeline import _resolve_repair_output
+        resolved = _resolve_repair_output(None, "pipe_abc")
+        assert resolved is not None
+        assert "pipe_abc" in resolved
+        assert resolved.endswith(".json")
+        assert "repair_pending" in resolved
+
+    def test_resolve_empty_pipeline_id(self):
+        from expflow_pde.cli_pipeline import _resolve_repair_output
+        resolved = _resolve_repair_output(None, "")
+        assert resolved is None
+
+    def test_collision_appends_dot_n(self, tmp_path):
+        from expflow_pde.cli_pipeline import _resolve_repair_output
+        base = str(tmp_path / "collide.json")
+        # Write a file to cause collision
+        open(base, "w").close()
+        resolved = _resolve_repair_output(base, "pipe_abc")
+        assert resolved != base
+        assert resolved.endswith(".1")
+
+    def test_multiple_collisions(self, tmp_path):
+        from expflow_pde.cli_pipeline import _resolve_repair_output
+        base = str(tmp_path / "multi.json")
+        open(base, "w").close()
+        open(base + ".1", "w").close()
+        resolved = _resolve_repair_output(base, "pipe_abc")
+        assert resolved == base + ".2"

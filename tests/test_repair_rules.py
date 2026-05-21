@@ -139,3 +139,45 @@ class TestMatchFirst:
     def test_no_match_on_success(self):
         result = match_first("Training completed. Score: 57.09", 0)
         assert result is None
+
+
+class TestSignalExitCodes:
+    """L0 rules should match on signal exit codes (134/137/139/143)."""
+
+    def test_git_rule_matches_signal_137(self):
+        rule = GitProjectNotFoundRule()
+        log = "fatal: Could not read from remote repository."
+        assert rule.matches(log, 137)
+
+    def test_git_rule_matches_signal_139(self):
+        rule = GitProjectNotFoundRule()
+        log = "The project you were looking for could not be found."
+        assert rule.matches(log, 139)
+
+    def test_module_rule_matches_signal_137(self):
+        rule = ModuleNotFoundRule()
+        log = "ModuleNotFoundError: No module named 'torch'"
+        assert rule.matches(log, 137)
+
+    def test_module_rule_matches_signal_134(self):
+        rule = ModuleNotFoundRule()
+        log = "ImportError: libcuda.so.1 cannot open"
+        assert rule.matches(log, 134)
+
+    def test_pip_rule_matches_signal_143(self):
+        rule = PipConflictRule()
+        log = "pip install impossible: package conflict"
+        assert rule.matches(log, 143)
+
+    def test_pip_rule_matches_signal_137(self):
+        rule = PipConflictRule()
+        log = "pip resolution failed: conflicting packages"
+        assert rule.matches(log, 137)
+
+    def test_match_first_signal_137_returns_same_as_exit_1(self):
+        log = "ModuleNotFoundError: No module named 'h5py'"
+        r1 = match_first(log, 1)
+        r2 = match_first(log, 137)
+        assert r1 is not None
+        assert r2 is not None
+        assert r1["rule"] == r2["rule"] == "module_not_found"
