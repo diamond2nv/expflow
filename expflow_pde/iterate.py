@@ -61,6 +61,22 @@ def run_iteration(
         eval_script=eval_script,
     )
 
+    # Auto-repair if pipeline failed
+    if pipe_result.get("status") not in ("completed", "success", "started"):
+        from expflow_pde.repair import RepairStage
+
+        task_log = pipe_result.get("error", "")
+        stage = RepairStage(
+            experiment_id=pipe_result.get("pipeline_id", ""),
+            max_l1_attempts=2,
+        )
+        repair = stage.run(
+            task_log=task_log,
+            exit_code=1,
+            enable_reflection=False,
+        )
+        pipe_result["repair"] = repair
+
     return {
         "diagnosis": diagnosis,
         "suggestion": suggestion,

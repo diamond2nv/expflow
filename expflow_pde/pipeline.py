@@ -402,6 +402,39 @@ class ExperimentPipeline:
         except Exception:
             return None
 
+    # ── Repair a failed task ──
+
+    def repair_task(
+        self,
+        task_log: str,
+        exit_code: int,
+        enable_reflection: bool = False,
+    ) -> dict[str, Any]:
+        """Analyze a failed task and suggest/apply repair.
+
+        Uses three-level repair (L0 rule engine → L1 traceback → L2 reflection).
+        Result dict is compatible with the pipeline result format.
+
+        Args:
+            task_log: Console output from the failed task.
+            exit_code: Process exit code.
+            enable_reflection: Whether to allow L2 subagent reflection.
+
+        Returns:
+            Dict with keys: fixed, level, action, attempts, history.
+        """
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage(
+            experiment_id=self._last_result.get("pipeline_id", "") if self._last_result else "",
+            max_l1_attempts=2,
+        )
+        return stage.run(
+            task_log=task_log,
+            exit_code=exit_code,
+            enable_reflection=enable_reflection,
+        )
+
     @property
     def last_result(self) -> dict[str, Any] | None:
         """Return the result from the most recent pipeline call."""

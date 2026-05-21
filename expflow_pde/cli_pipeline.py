@@ -61,6 +61,10 @@ def submit_cmd(
         "--skip",
         help="Steps to skip: e.g. --skip eval --skip train",
     ),
+    repair: bool = typer.Option(False, "--repair", "-r",
+        help="Auto-repair on failure (must also use --wait)"),
+    repair_reflection: bool = typer.Option(False, "--repair-reflection",
+        help="Enable L2 reflection subagent for repair"),
 ) -> None:
     """Submit a fast train -> eval pipeline (Mode B).
 
@@ -117,6 +121,9 @@ def submit_cmd(
 
     _print_result(result, wait, timeout)
 
+    if repair and wait:
+        _maybe_repair_pipeline(result, repair_reflection, queue, project)
+
 
 # ── Mode A (full): HPO → Train → Eval ──
 
@@ -150,6 +157,10 @@ def submit_full_cmd(
         "--skip",
         help="Steps to skip: e.g. --skip hpo --skip eval",
     ),
+    repair: bool = typer.Option(False, "--repair", "-r",
+        help="Auto-repair on failure (must also use --wait)"),
+    repair_reflection: bool = typer.Option(False, "--repair-reflection",
+        help="Enable L2 reflection subagent for repair"),
 ) -> None:
     """Submit a full HPO -> train -> eval pipeline (Mode A).
 
@@ -200,6 +211,9 @@ def submit_full_cmd(
 
     _print_result(result, wait, timeout)
 
+    if repair and wait:
+        _maybe_repair_pipeline(result, repair_reflection, queue, project)
+
 
 # ── Shared printer ──
 
@@ -220,3 +234,61 @@ def _print_result(result: dict[str, Any], wait: bool, timeout: float | None) -> 
     print(f"  Status:   {result['status']}")
     if wait:
         print(f"  Wait:     completed (timeout={timeout or 'none'} min)")
+
+
+# ── Repair integration ──
+
+
+def _maybe_repair_pipeline(
+    result: dict[str, Any],
+    enable_reflection: bool,
+    queue: str,
+    project: str,
+) -> None:
+    """Check pipeline status and attempt repair if failed.
+
+    Called after --wait completes. If the pipeline finished with errors,
+    runs RepairStage analysis and prints suggestions.
+    """
+    status = result.get("status", "")
+    if status in ("completed", "success"):
+        print("  Repair:   no repair needed (pipeline completed successfully)")
+        return
+
+    pipeline_id = result.get("pipeline_id", "")
+    if not pipeline_id:
+        print("  Repair:   no pipeline_id — cannot check task status")
+        return
+
+    print(f"  Repair:   pipeline failed (status={status}), analyzing...")
+
+    # Try to fetch task log from clearml
+    task_log = ""
+    exit_code = 1
+    try:
+        from clearml import Task
+
+        task = Task.get_task(task_id=pipeline_id)
+        console = task.get_reported_console_output()
+        task_log = "\n".join(console) if console else ""
+        # Check if clearml reports the actual exit code
+        status_msg = getattr(task, "status", "")
+        if "failed" in str(status_msg).lower():
+            exit_code = 1
+    except Exception:
+        pass
+
+    from expflow_pde.pipeline import ExperimentPipeline
+
+    ep = ExperimentPipeline(project=project, queue=queue)
+    repair_result = ep.repair_task(
+        task_log=task_log,
+        exit_code=exit_code,
+        enable_reflection=enable_reflection,
+    )
+
+    print(f"  Repair:   level={repair_result.get('level', '?')}")
+    print(f"  Fixed:    {repair_result.get('fixed', False)}")
+    print(f"  Action:   {repair_result.get('action', '?')[:200]}")
+    if repair_result.get("history"):
+        print(f"  History:  {len(repair_result['history'])} attempt(s)")
