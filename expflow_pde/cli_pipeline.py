@@ -65,6 +65,9 @@ def submit_cmd(
         help="Auto-repair on failure (must also use --wait)"),
     repair_reflection: bool = typer.Option(False, "--repair-reflection",
         help="Enable L2 reflection subagent for repair"),
+    repair_output: Optional[str] = typer.Option(
+        None, "--repair-output",
+        help="Write repair result to JSON file (for L2 subagent watcher)"),
 ) -> None:
     """Submit a fast train -> eval pipeline (Mode B).
 
@@ -83,6 +86,11 @@ def submit_cmd(
 
         # Skip eval (train only)
         expflow pipeline submit train_task1.py --skip eval
+
+        # Repair with L2 reflection output to file (for Hermes subagent)
+        expflow pipeline submit train_task1.py --queue default \\
+            --wait --repair --repair-reflection \\
+            --repair-output /tmp/l2_repair.json
     """
     from expflow_pde.pipeline import ExperimentPipeline
 
@@ -122,7 +130,7 @@ def submit_cmd(
     _print_result(result, wait, timeout)
 
     if repair and wait:
-        _maybe_repair_pipeline(result, repair_reflection, queue, project)
+        _maybe_repair_pipeline(result, repair_reflection, queue, project, repair_output)
 
 
 # ── Mode A (full): HPO → Train → Eval ──
@@ -161,6 +169,9 @@ def submit_full_cmd(
         help="Auto-repair on failure (must also use --wait)"),
     repair_reflection: bool = typer.Option(False, "--repair-reflection",
         help="Enable L2 reflection subagent for repair"),
+    repair_output: Optional[str] = typer.Option(
+        None, "--repair-output",
+        help="Write repair result to JSON file (for L2 subagent watcher)"),
 ) -> None:
     """Submit a full HPO -> train -> eval pipeline (Mode A).
 
@@ -212,7 +223,7 @@ def submit_full_cmd(
     _print_result(result, wait, timeout)
 
     if repair and wait:
-        _maybe_repair_pipeline(result, repair_reflection, queue, project)
+        _maybe_repair_pipeline(result, repair_reflection, queue, project, repair_output)
 
 
 # ── Shared printer ──
@@ -244,11 +255,16 @@ def _maybe_repair_pipeline(
     enable_reflection: bool,
     queue: str,
     project: str,
+    repair_output: str | None = None,
 ) -> None:
     """Check pipeline status and attempt repair if failed.
 
     Called after --wait completes. If the pipeline finished with errors,
     runs RepairStage analysis and prints suggestions.
+
+    When enable_reflection=True and repair_output is set, writes the full
+    structured L2 result to a JSON file that Hermes can watch and consume
+    via the l2-repair-executor skill (spawns a delegate_task subagent).
     """
     status = result.get("status", "")
     if status in ("completed", "success"):
@@ -292,3 +308,12 @@ def _maybe_repair_pipeline(
     print(f"  Action:   {repair_result.get('action', '?')[:200]}")
     if repair_result.get("history"):
         print(f"  History:  {len(repair_result['history'])} attempt(s)")
+
+    # Write structured repair output to file for Hermes L2 executor
+    if repair_output and repair_result.get("level") == "L2":
+        import json
+        import os
+        os.makedirs(os.path.dirname(repair_output) or ".", exist_ok=True)
+        with open(repair_output, "w") as f:
+            json.dump(repair_result, f, indent=2, ensure_ascii=False)
+        print(f"  L2 output: {repair_output} (awaiting Hermes subagent)")

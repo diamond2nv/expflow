@@ -218,7 +218,12 @@ class RepairStage:
     # ── L2: Reflection subagent────
 
     def _try_l2(self, task_log: str, exit_code: int) -> dict[str, Any]:
-        """Prepare context for L2 reflection."""
+        """Prepare structured L2 reflection context for Hermes subagent.
+
+        Returns a machine-readable dict that Hermes can consume to spawn a
+        delegate_task subagent. The subagent produces a fix plan (not code).
+        """
+        # Extract traceback lines for context
         tb_lines: list[str] = []
         for line in task_log.split("\n"):
             if "Traceback" in line or "Error" in line or "File " in line:
@@ -226,31 +231,132 @@ class RepairStage:
             if len(tb_lines) > 30:
                 break
 
+        # Identify exception type and message
+        exc_type = "Unknown"
+        exc_message = ""
+        for line in reversed(tb_lines):
+            stripped = line.strip()
+            if stripped and "File" not in stripped and "Traceback" not in stripped:
+                if ":" in stripped:
+                    exc_type = stripped.split(":")[0].strip()
+                    exc_message = ":".join(stripped.split(":")[1:]).strip()
+                else:
+                    exc_type = stripped.strip()
+                break
+
+        # Extract file paths from traceback
+        files_to_check: list[str] = []
+        for line in tb_lines:
+            m = re.search(r'File "(.+?)"', line)
+            if m:
+                fp = m.group(1)
+                if fp not in files_to_check:
+                    files_to_check.append(fp)
+
+        # Map exception type to relevant wiki pages
+        wiki_paths = self._exc_type_to_wiki(exc_type)
+
+        # Render the subagent prompt with structured context
+        context = {
+            "experiment_id": self._exp_id,
+            "exit_code": exit_code,
+            "exc_type": exc_type,
+            "exc_message": exc_message,
+            "files_to_check": files_to_check,
+            "wiki_paths": wiki_paths,
+            "tb_snippet": tb_lines[:20],
+        }
+        prompt = self._render_l2_prompt(context)
+
         return {
             "level": "L2",
             "fixed": False,
-            "action": (
-                "L2 context prepared. Hermes should spawn a delegate_task subagent "
-                "with failure context + wiki knowledge. Subagent produces a fix plan."
-            ),
+            "needs_human": False,
+            "action": "L2 context ready — Hermes should spawn a delegate_task subagent.",
             "context_length": len(task_log),
+            "exit_code": exit_code,
+            "experiment_id": self._exp_id,
+            "exc_type": exc_type or "Unknown",
+            "exc_message": exc_message or "",
+            "files_to_check": files_to_check or [],
+            "wiki_paths": wiki_paths or [],
             "tb_snippet": tb_lines[:20],
-            "subagent_prompt_template": (
-                "Analyze this experiment failure and produce a fix plan.\n"
-                "1. Root cause analysis\n"
-                "2. Files that need changes\n"
-                "3. Exact changes to make\n"
-                "4. Verification steps\n"
-                "Do NOT apply changes directly — return a plan for Hermes to execute."
-            ),
+            "subagent_prompt": prompt,
+            "subagent_schema": {
+                "goal": "Analyze experiment failure and produce a fix plan",
+                "role": "leaf",
+                "toolsets": ["terminal", "file", "skills"],
+            },
         }
+
+    _EXC_TYPE_WIKI: dict[str, list[str]] = {
+        "ModuleNotFoundError": [
+            "~/wiki/troubleshooting/pip-dependencies.md",
+        ],
+        "torch.cuda.OutOfMemoryError": [
+            "~/wiki/troubleshooting/gpu-memory.md",
+        ],
+        "FileNotFoundError": [
+            "~/wiki/troubleshooting/data-paths.md",
+        ],
+        "git": [
+            "~/wiki/ops/ssh-keys.md",
+        ],
+        "error": [],  # unknown
+    }
+
+    def _exc_type_to_wiki(self, exc_type: str) -> list[str]:
+        """Map exception type to relevant wiki page paths."""
+        for key, paths in self._EXC_TYPE_WIKI.items():
+            if key in exc_type:
+                return list(paths)
+        return []
+
+    def _render_l2_prompt(self, context: dict) -> str:
+        """Render the subagent prompt template with actual context values."""
+        tb_str = "\n".join(context.get("tb_snippet", []))
+        files_str = "\n".join(f"  - {f}" for f in context.get("files_to_check", []))
+        wiki_str = "\n".join(f"  - {w}" for w in context.get("wiki_paths", []))
+
+        return (
+            "Analyze this experiment failure and produce a fix plan.\n"
+            "\n"
+            "## Failure Context\n"
+            f"Experiment ID: {context.get('experiment_id', '?')}\n"
+            f"Exit code: {context.get('exit_code', 1)}\n"
+            f"Exception: {context.get('exc_type', 'Unknown')}\n"
+            f"Message: {context.get('exc_message', '')}\n"
+            "\n"
+            "## Traceback\n"
+            f"{tb_str}\n"
+            "\n"
+            "## Files Involved\n"
+            f"{files_str}\n"
+            "\n"
+            "## Wiki Context\n"
+            f"{wiki_str}\n"
+            "\n"
+            "## Task\n"
+            "1. Identify the root cause.\n"
+            "2. Determine which files need changes and what the changes are.\n"
+            "3. Return a fix plan in this EXACT format:\n"
+            "\n"
+            "   file: <relative or absolute path>\n"
+            "   old: <exact text to replace>\n"
+            "   new: <replacement text>\n"
+            "\n"
+            "   You may include multiple fix blocks.\n"
+            "   If you cannot determine the fix, return: no_plan: <reason>\n"
+            "\n"
+            "Do NOT apply changes directly. Do NOT run code. Return only the plan."
+        )
 
     # ── Internal helpers ──
 
     def _build_result(self, level: str, detail: dict[str, Any]) -> dict[str, Any]:
         """Build the final result dict."""
         self._fixed = detail.get("fixed", False)
-        return {
+        result: dict[str, Any] = {
             "fixed": self._fixed,
             "level": level,
             "action": detail.get("action", ""),
@@ -261,6 +367,16 @@ class RepairStage:
                 detail.get("action", "Repair attempted but unsuccessful")
             ),
         }
+        # For L2 results, propagate structured context to top level
+        # so Hermes doesn't need to dig into history[]
+        if level == "L2":
+            for key in ("exc_type", "exc_message", "files_to_check",
+                       "wiki_paths", "tb_snippet", "subagent_prompt",
+                       "subagent_schema", "exit_code", "experiment_id",
+                       "context_length"):
+                if key in detail:
+                    result[key] = detail[key]
+        return result
 
     def to_json(self) -> str:
         """Serialize repair result to JSON (for audit_log)."""
