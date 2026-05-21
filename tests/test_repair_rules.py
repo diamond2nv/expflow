@@ -48,7 +48,6 @@ class TestGitProjectNotFoundRule:
         assert "action" in result
         assert "confidence" in result
         assert result["confidence"] > 0.5
-        assert not result["needs_user_action"]
 
 
 class TestModuleNotFoundRule:

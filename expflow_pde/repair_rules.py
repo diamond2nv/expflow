@@ -66,7 +66,7 @@ class GitProjectNotFoundRule(RepairRule):
         if exit_code != 128:
             return False
         lower_log = task_log.lower()
-        return "project not found" in lower_log or "could not read from" in lower_log \
+        return "project not found" in lower_log or "could not read" in lower_log \
             or "could not be found" in lower_log
 
     def fix_suggestion(self, task_log: str) -> dict[str, Any]:
@@ -81,7 +81,7 @@ class GitProjectNotFoundRule(RepairRule):
             "file": None,
             "command": "ssh -T git@gitlab-pdebench",
             "confidence": 0.85,
-            "needs_user_action": False,
+            "needs_user_action": True,
         }
 
 
