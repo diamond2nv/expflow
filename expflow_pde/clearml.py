@@ -668,6 +668,7 @@ def pipeline_create(
     add_pipeline_tags: bool = False,
     add_run_number: bool = True,
     docker: str | None = None,
+    packages: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a clearml PipelineController and start tracking it.
 
@@ -696,6 +697,10 @@ def pipeline_create(
         add_run_number=add_run_number,
         docker=docker,
     )
+
+    # Set packages on the pipeline if explicitly provided
+    if packages is not None:
+        pipe.set_default_packages(packages)
 
     return {
         "pipeline_id": pipe.id if hasattr(pipe, "id") else "",

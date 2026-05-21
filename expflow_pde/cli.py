@@ -162,6 +162,22 @@ def _lazy_register_pipeline():
     return pipeline_app
 
 
+def _lazy_register_repeat():
+    """Lazily import and register repeat sub-command group."""
+    from expflow_pde.cli_repeat import repeat_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "repeat":
+            return repeat_app
+
+    app.add_typer(
+        repeat_app,
+        name="repeat",
+        help="Repair diagnosis and resubmit (Hermes /goal compatible)",
+    )
+    return repeat_app
+
+
 # Call at module level to register sub-command groups
 # ── Backward-compat sub-command groups ──
 _ = _lazy_register_clearml()
@@ -173,6 +189,7 @@ _ = _lazy_register_system()
 _ = _lazy_register_pin()
 _ = _lazy_register_analyze()
 _ = _lazy_register_pipeline()
+_ = _lazy_register_repeat()
 
 
 def _lazy_register_dispatch():

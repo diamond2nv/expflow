@@ -62,6 +62,7 @@ class ExperimentPipeline:
         docker: str | None = None,
         abort_on_failure: bool = False,
         add_run_number: bool = True,
+        packages: list[str] | None = None,
     ) -> None:
         """Initialize the pipeline orchestrator."""
         self.project = project
@@ -69,6 +70,7 @@ class ExperimentPipeline:
         self.docker = docker
         self.abort_on_failure = abort_on_failure
         self.add_run_number = add_run_number
+        self.packages = packages
         self._last_result: dict[str, Any] | None = None
 
     # ── Mode B (fast): train → eval ──
@@ -129,6 +131,7 @@ class ExperimentPipeline:
             add_pipeline_tags=True,
             add_run_number=self.add_run_number,
             docker=self.docker,
+            packages=self.packages,
         )
         if "error" in create_result:
             raise RuntimeError(f"Pipeline creation failed: {create_result.get('error', 'unknown')}")
@@ -275,6 +278,7 @@ class ExperimentPipeline:
             add_pipeline_tags=True,
             add_run_number=self.add_run_number,
             docker=self.docker,
+            packages=self.packages,
         )
         if "error" in create_result:
             raise RuntimeError(f"Pipeline creation failed: {create_result.get('error', 'unknown')}")

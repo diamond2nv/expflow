@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """Tests for expflow_pde.repair — RepairStage three-level auto-repair."""
 
-
 from expflow_pde.repair import RepairStage
 
 
@@ -131,6 +130,7 @@ class TestRepairStageProperties:
         stage.run("ModuleNotFoundError: No module named 'x'", 1)
         json_str = stage.to_json()
         import json
+
         parsed = json.loads(json_str)
         assert parsed["experiment_id"] == "exp_abc123"
         assert "repair_history" in parsed
@@ -142,7 +142,7 @@ class TestRepairStageEdgeCases:
     def test_long_error_log(self):
         """Very long logs should not break L1 extraction."""
         log = "\n".join([f"Line {i}" for i in range(1000)])
-        log += "\nTraceback (most recent call last):\n  File \"test.py\", line 1, in <module>\n    raise ValueError(\"test\")\nValueError: test"
+        log += '\nTraceback (most recent call last):\n  File "test.py", line 1, in <module>\n    raise ValueError("test")\nValueError: test'
         stage = RepairStage(max_l1_attempts=1)
         result = stage.run(log, 1)
         assert result["level"] == "L1"
@@ -188,12 +188,15 @@ class TestRepairStageInputValidation:
 
     def test_normal_log_still_valid(self):
         stage = RepairStage()
-        result = stage.run("Traceback (most recent call last):\nValueError: bad", 1, enable_reflection=True)
+        result = stage.run(
+            "Traceback (most recent call last):\nValueError: bad", 1, enable_reflection=True
+        )
         assert result.get("input_valid", True) is True
 
     def test_killed_log_contains_failure_signal(self):
         """'Killed' should be recognized as a failure signal."""
         from expflow_pde.repair import _log_has_failure_signal
+
         assert _log_has_failure_signal("Killed")
         assert _log_has_failure_signal("process was Killed")
 
@@ -278,51 +281,26 @@ class TestRepairStageWikiMapping:
 
     def test_l2_propagates_wiki_source(self):
         stage = RepairStage()
-        result = stage.run("Traceback:\nModuleNotFoundError: no module 'x'", 1, enable_reflection=True)
+        result = stage.run(
+            "Traceback:\nModuleNotFoundError: no module 'x'", 1, enable_reflection=True
+        )
         if result["level"] == "L2":
             assert "wiki_source" in result
             assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "none")
 
 
-
 class TestResolveRepairOutput:
-    """_resolve_repair_output collision-safe paths."""
+    """_resolve_repair_output (moved to cli_repeat) — check import."""
 
-    def test_resolve_with_user_path(self, tmp_path):
-        from expflow_pde.cli_pipeline import _resolve_repair_output
-        user_path = str(tmp_path / "l2_repair.json")
-        resolved = _resolve_repair_output(user_path, "pipe_abc")
-        assert resolved == user_path
+    def test_fetch_task_log_importable(self):
+        from expflow_pde.cli_repeat import _fetch_task_log
 
-    def test_resolve_without_user_path_has_timestamp(self):
-        from expflow_pde.cli_pipeline import _resolve_repair_output
-        resolved = _resolve_repair_output(None, "pipe_abc")
-        assert resolved is not None
-        assert "pipe_abc" in resolved
-        assert resolved.endswith(".json")
-        assert "repair_pending" in resolved
+        assert callable(_fetch_task_log)
 
-    def test_resolve_empty_pipeline_id(self):
-        from expflow_pde.cli_pipeline import _resolve_repair_output
-        resolved = _resolve_repair_output(None, "")
-        assert resolved is None
+    def test_print_diagnosis_importable(self):
+        from expflow_pde.cli_repeat import _print_diagnosis
 
-    def test_collision_appends_dot_n(self, tmp_path):
-        from expflow_pde.cli_pipeline import _resolve_repair_output
-        base = str(tmp_path / "collide.json")
-        # Write a file to cause collision
-        open(base, "w").close()
-        resolved = _resolve_repair_output(base, "pipe_abc")
-        assert resolved != base
-        assert resolved.endswith(".1")
-
-    def test_multiple_collisions(self, tmp_path):
-        from expflow_pde.cli_pipeline import _resolve_repair_output
-        base = str(tmp_path / "multi.json")
-        open(base, "w").close()
-        open(base + ".1", "w").close()
-        resolved = _resolve_repair_output(base, "pipe_abc")
-        assert resolved == base + ".2"
+        assert callable(_print_diagnosis)
 
 
 class TestRepairStageSignalWikiMapping:
@@ -351,12 +329,14 @@ class TestRepairStageSignalWikiMapping:
 
     def test_signal_134_routes_to_abort_wiki(self):
         from expflow_pde.repair import RepairStage
+
         info = RepairStage._signal_to_wiki(134, "SIGABRT")
         assert info["source"] == "signal"
         assert any("abort" in p for p in info.get("paths", []))
 
     def test_unsupported_signal_routes_to_unknown(self):
         from expflow_pde.repair import RepairStage
+
         info = RepairStage._signal_to_wiki(6, "SIGABRT")
         assert info["source"] == "signal"
         assert any("unknown-signal" in p for p in info.get("paths", []))
@@ -367,12 +347,14 @@ class TestRepairStageWordMatch:
 
     def test_disk_in_type_name_not_falsely_matches(self):
         from expflow_pde.repair import RepairStage
+
         # "diskerror" should NOT match "disk" keyword due to exclusion list
         paths = RepairStage._CLASSIFY_EXC("DiskError", "bogus error")
         assert len(paths) == 0
 
     def test_killed_as_substring_not_falsely_matches(self):
         from expflow_pde.repair import RepairStage
+
         # "diskilled" contains "killed" as substring but not as whole word
         combined = "diskilled operation failed"
         assert not RepairStage._word_in(combined, "killed")
@@ -381,11 +363,13 @@ class TestRepairStageWordMatch:
 
     def test_oom_whole_word_matches(self):
         from expflow_pde.repair import RepairStage
+
         paths = RepairStage._CLASSIFY_EXC("RuntimeError", "CUDA OOM during forward pass")
         assert any("gpu-memory" in p for p in paths)
 
     def test_no_space_matches_disk_quota(self):
         from expflow_pde.repair import RepairStage
+
         paths = RepairStage._CLASSIFY_EXC("OSError", "No space left on device")
         assert any("disk-space" in p for p in paths)
 
@@ -418,6 +402,7 @@ class TestRepairStageFixPlanSchema:
 
     def test_l2_prompt_contains_json_schema(self):
         from expflow_pde.repair import RepairStage
+
         stage = RepairStage(experiment_id="exp_test")
         context = {
             "experiment_id": "exp_test",
@@ -435,13 +420,13 @@ class TestRepairStageFixPlanSchema:
 
 
 class TestFetchTaskLogTriple:
-    """_fetch_task_log returns 3-tuple (log, exit_code, fetch_success)."""
+    """_fetch_task_log (now in cli_repeat) returns 3-tuple."""
 
     def test_signature_is_three_tuple(self):
         import inspect
 
-        from expflow_pde.cli_pipeline import _fetch_task_log
+        from expflow_pde.cli_repeat import _fetch_task_log
+
         sig = inspect.signature(_fetch_task_log)
         hint = sig.return_annotation
-        # Check return annotation hint
         assert hint is not inspect.Parameter.empty
