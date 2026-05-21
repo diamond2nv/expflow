@@ -356,3 +356,41 @@ MCP 服务器运行时，Hermes Agent 可以访问 18+ 个工具：
 - [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md) — 开发者指南
 - [DATA_LAYER.zh-CN.md](DATA_LAYER.zh-CN.md) — ClearML 数据层
 - [COMPETITION.zh-CN.md](COMPETITION.zh-CN.md) — 竞赛集成
+- [DUMMY_GAME.zh-CN.md](DUMMY_GAME.zh-CN.md) — 实验模拟器（无需 GPU）
+
+---
+
+## 虚拟实验游戏
+
+**虚拟实验游戏**是 expflow 实验生命周期的零依赖模拟系统。它将真实 GPU 训练替换为合成 seg 分数模型，因此你无需任何基础设施即可测试完整的 diagnose → suggest → submit → fail → repair → iterate 循环。
+
+```bash
+# 启动游戏、运行一步、注入故障
+expflow dummy start --task task1
+expflow dummy step --params '{"n_modes": 20}'
+expflow dummy step --inject cuda_oom
+
+# 检查游戏创建的实验树
+expflow dispatch tree $(expflow dummy status | grep root_id | cut -d'"' -f4)
+
+# 运行全自动循环
+expflow dummy auto --max-steps 10 --repair
+```
+
+### 可用故障模式
+
+| 模式 | 修复层级 | 说明 |
+|------|:--------:|------|
+| `git_not_found` | L0（规则） | Git 克隆失败，"project not found" |
+| `module_not_found` | L0（规则） | 缺少 Python 依赖 |
+| `cuda_oom` | L1（追踪） | CUDA 内存溢出错误 |
+| `data_not_found` | L1（追踪） | 缺少数据文件 |
+| `unknown_error` | L2（反思） | 不透明错误，需深度分析 |
+
+### 使用场景
+
+- **集成测试**：验证修复流水线对每类故障的响应是否正确
+- **入门体验**：无需安装 GPU 工具链即可了解 expflow 的工作方式
+- **CI/CD**：在 CI 中运行全自动循环，捕获 diagnose/suggest/repair 的回退
+
+详见 [DUMMY_GAME.zh-CN.md](DUMMY_GAME.zh-CN.md)。

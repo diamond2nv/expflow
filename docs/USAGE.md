@@ -330,3 +330,41 @@ Training and evaluation scripts must follow these conventions for expflow compat
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Developer guide
 - [DATA_LAYER.md](DATA_LAYER.md) — ClearML data layer
 - [COMPETITION.md](COMPETITION.md) — Competition integration
+- [DUMMY_GAME.md](DUMMY_GAME.md) — Experiment simulator (no GPU needed)
+
+---
+
+## Dummy Experiment Game
+
+The **Dummy Experiment Game** is a zero-dependency simulation of the expflow experiment lifecycle. It replaces real GPU training with a synthetic seg-score model, so you can test the entire diagnose → suggest → submit → fail → repair → iterate loop without any infrastructure.
+
+```bash
+# Start a game, run a step, inject a failure
+expflow dummy start --task task1
+expflow dummy step --params '{"n_modes": 20}'
+expflow dummy step --inject cuda_oom
+
+# Inspect the experiment tree created by the game
+expflow dispatch tree $(expflow dummy status | grep root_id | cut -d'"' -f4)
+
+# Run a fully automated loop
+expflow dummy auto --max-steps 10 --repair
+```
+
+### Available Failure Patterns
+
+| Pattern | Repair Level | Description |
+|---------|:-----------:|-------------|
+| `git_not_found` | L0 (rule) | Git clone fails with "project not found" |
+| `module_not_found` | L0 (rule) | Missing Python dependency |
+| `cuda_oom` | L1 (traceback) | CUDA out-of-memory error |
+| `data_not_found` | L1 (traceback) | Missing data file |
+| `unknown_error` | L2 (reflection) | Opaque error, needs deep analysis |
+
+### Use Cases
+
+- **Integration testing**: Verify the repair pipeline responds correctly to each failure class
+- **Onboarding**: See how expflow works without installing GPU toolchain
+- **CI/CD**: Run the full automate loop in CI to catch regressions in diagnose/suggest/repair
+
+See [DUMMY_GAME.md](DUMMY_GAME.md) for full documentation.

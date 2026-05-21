@@ -56,6 +56,19 @@ Running PDEBench or Agentic4Sci experiments involves coordinating multiple tools
 | LLM call observability | `expflow langfuse trace` — trace cost, session management |
 | Multi-machine dispatch | `expflow run submit` — git worktree + clearml-agent queue |
 | System monitoring | `expflow system status` — component health checks |
+| Experiment simulation | `expflow dummy` — full lifecycle test without GPU/clearml |
+
+### Built-in Experiment Simulator
+
+**`expflow dummy`** — simulate the entire experiment loop (diagnose → suggest → submit → fail → repair → iterate) **without GPUs, ClearML, or torch**. Inject realistic failures (git clone error, CUDA OOM, missing module), verify L0/L1/L2 repair, and inspect the full experiment tree in DispatchDB — all from a single CLI command on your laptop.
+
+```bash
+expflow dummy start                        # Start a game
+expflow dummy step --inject cuda_oom       # Test L1 traceback repair
+expflow dummy auto --max-steps 10 --repair # Full automated loop
+```
+
+[Full documentation →](docs/DUMMY_GAME.md) | [中文文档 →](docs/cn/DUMMY_GAME.zh-CN.md)
 
 ### Non-Goals
 
@@ -78,7 +91,10 @@ expflow
 ├── audit                ← Validate, compare, compliance report
 ├── system               ← Health checks, TensorBoard
 ├── pin                  ← PIN-protect destructive operations
-├── analyze              ← Task intelligence, equation registry, strategy
+| analyze              ← Task intelligence, equation registry, strategy
+├── dummy               ← Experiment simulator (no GPU needed)
+├── dispatch            ← Local SQLite experiment registry
+├── iterate             ← One-shot: diagnose → suggest → submit
 └── pipeline             ← Train → eval → submit pipeline
 ```
 
@@ -212,4 +228,5 @@ MIT
 - [Developer Guide](docs/DEVELOPMENT.md)
 - [Data Layer Design](docs/DATA_LAYER.md)
 - [Competition Integration](docs/COMPETITION.md)
+- [Dummy Experiment Game](docs/DUMMY_GAME.md) (English) | [虚拟实验游戏](docs/cn/DUMMY_GAME.zh-CN.md)
 - [Hermes Agent Skills](skills/) — 4 skills for MLOps experiment orchestration
