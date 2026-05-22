@@ -70,9 +70,35 @@ class ExperimentPipeline:
         self.docker = docker
         self.abort_on_failure = abort_on_failure
         self.add_run_number = add_run_number
-        # For bare-metal conda environments: default to empty list (use conda env directly).
-        # None would cause clearml SDK to auto-detect all packages (pip install) which fails.
-        self.packages = packages if packages is not None else []
+        # ── 3-tier packages resolution ──
+        # 1) Explicit constructor arg (highest priority)
+        # 2) config.yaml pipeline.packages
+        # 3) Default to [] (bare-metal conda env assumption)
+        if packages is not None:
+            resolved_packages = list(packages)
+        else:
+            try:
+                from expflow_pde.config import get
+
+                cfg_packages = get("pipeline.packages")
+                if cfg_packages is not None:
+                    resolved_packages = list(cfg_packages)
+                else:
+                    resolved_packages = []
+            except Exception:
+                resolved_packages = []
+        self.packages = resolved_packages
+        if not self.packages:
+            import warnings
+
+            warnings.warn(
+                "packages=[]: clearml-agent will NOT auto-install any pip deps. "
+                "Set 'pipeline.packages' in config.yaml or pass "
+                "packages=['torch', 'numpy', ...] to ExperimentPipeline(). "
+                "This default assumes bare-metal conda env with pre-installed deps.",
+                UserWarning,
+                stacklevel=2,
+            )
         self._last_result: dict[str, Any] | None = None
 
     # ── Mode B (fast): train → eval ──
@@ -147,9 +173,7 @@ class ExperimentPipeline:
         if "train" not in skip and train_script:
             train_override: dict[str, Any] = {}
             if train_params:
-                train_override["Args"] = {
-                    k: str(v) for k, v in train_params.items()
-                }
+                train_override["Args"] = {k: str(v) for k, v in train_params.items()}
 
             add_train_result = pipeline_add_step(
                 pipeline_name=pipeline_name_actual,
@@ -167,9 +191,7 @@ class ExperimentPipeline:
         if "eval" not in skip and eval_script:
             eval_override: dict[str, Any] = {}
             if eval_params:
-                eval_override["Args"] = {
-                    k: str(v) for k, v in eval_params.items()
-                }
+                eval_override["Args"] = {k: str(v) for k, v in eval_params.items()}
 
             add_eval_result = pipeline_add_step(
                 pipeline_name=pipeline_name_actual,
@@ -348,9 +370,7 @@ class ExperimentPipeline:
 
             eval_override: dict[str, Any] = {}
             if eval_params:
-                eval_override["Args"] = {
-                    k: str(v) for k, v in eval_params.items()
-                }
+                eval_override["Args"] = {k: str(v) for k, v in eval_params.items()}
 
             add_eval_result = pipeline_add_step(
                 pipeline_name=pipeline_name_actual,

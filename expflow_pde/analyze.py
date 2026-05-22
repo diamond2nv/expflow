@@ -137,11 +137,16 @@ def _has_recent_oom(oom_history: list[dict[str, Any]], window: int = 3) -> bool:
 def _suppress_oom_params(
     suggestions: dict[str, Any],
     rationale: list[str],
-) -> tuple[dict[str, Any], list[str]]:
-    """Suppress capacity-increasing params when recent OOM detected."""
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Suppress capacity-increasing params when recent OOM detected.
+
+    Returns:
+        (suggestions, rationale, was_suppressed) — was_suppressed indicates
+        whether any param was actually removed.
+    """
     oom_history = _load_oom_history()
     if not _has_recent_oom(oom_history):
-        return suggestions, rationale
+        return suggestions, rationale, False
 
     suppressed_any = False
     for key in _OOM_HISTORY_KEYS:
@@ -157,7 +162,20 @@ def _suppress_oom_params(
     if suppressed_any and "tag" in suggestions:
         suggestions["tag"] = str(suggestions["tag"]) + "_oom_escape"
 
-    return suggestions, rationale
+    return suggestions, rationale, suppressed_any
+
+
+def _get_rejected_directions() -> list[dict[str, Any]]:
+    """Load rejected hypotheses with minimal import cost.
+
+    Returns empty list on any failure (no crash, graceful degradation).
+    """
+    try:
+        from expflow_pde.hypothesis import get_rejected_directions as _grd  # noqa: PLC0415
+
+        return _grd()
+    except Exception:
+        return []
 
 
 def _get_task_meta_path() -> str:
@@ -1044,7 +1062,38 @@ def suggest_next_params(
         rationale.append("Experiment stable. Run targeted HPO on remaining strategies.")
 
     # OOM suppression: prevent capacity increase after recent OOM events
-    suggestions, rationale = _suppress_oom_params(suggestions, rationale)
+    suggestions, rationale, was_suppressed = _suppress_oom_params(suggestions, rationale)
+
+    # ── Rejected hypothesis check ──
+    rejected = _get_rejected_directions()
+    skip_happened = was_suppressed
+    if rejected and suggestions:
+        for rej in rejected:
+            rej_params = rej.get("suggested_params", {})
+            if not rej_params:
+                continue
+            # Check parameter overlap: >60% keys match = same direction
+            matched_keys = set(rej_params.keys()) & set(suggestions.keys())
+            if matched_keys and len(matched_keys) >= max(1, len(rej_params) * 0.6):
+                rationale.append(
+                    f"[REJECTED SKIP] Params overlap with rejected hypothesis "
+                    f"'{rej.get('id', '?')}': {rej.get('hypothesis', '')[:60]}"
+                )
+                for k in matched_keys:
+                    suggestions.pop(k, None)
+                if "tag" in suggestions:
+                    suggestions["tag"] = str(suggestions["tag"]) + "_skip_rejected"
+                skip_happened = True
+                break
+
+    # If OOM or rejected caused all non-tag params to be removed, add fallback
+    if skip_happened:
+        suggestion_keys = {k for k in suggestions if k != "tag"}
+        if not suggestion_keys:
+            suggestions["lr"] = 0.001
+            suggestions["epochs"] = 80
+            suggestions["tag"] = "auto_fallback"
+            rationale.append("All suggestions suppressed/rejected. Running fallback HPO round.")
 
     return {
         "suggested_params": suggestions,
@@ -1264,9 +1313,52 @@ def cross_task_transfer(
         existing_raw = []
     existing_strategies: list[dict[str, Any]] = [s for s in existing_raw if isinstance(s, dict)]
 
-    # Avoid duplicates
-    existing_texts = {s.get("text", "") for s in existing_strategies if isinstance(s, dict)}
-    new_strategies = [s for s in strategies if s.get("text", "") not in existing_texts]
+    # ── 3-level dedup for cross_task_transfer ──
+
+    def _dedup_3level(
+        candidates: list[dict[str, Any]],
+        existing: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Remove duplicates from candidates vs existing using 3-level strategy.
+
+        Level 1: JSON param fingerprint (n_modes=16, width=32 → same params)
+        Level 2: Exact text match (current behavior)
+        Level 3: Fuzzy text match (SequenceMatcher >0.8 for minor wording diffs)
+        """
+        # Level 1: param fingerprint
+        existing_param_sigs: set[str] = set()
+        existing_texts: set[str] = set()
+        for s in existing:
+            if not isinstance(s, dict):
+                continue
+            sp = s.get("suggested_params")
+            if sp and isinstance(sp, dict):
+                existing_param_sigs.add(json.dumps(sp, sort_keys=True, default=str))
+            existing_texts.add(s.get("text", ""))
+
+        def _is_duplicate(candidate: dict) -> bool:
+            """Check if a candidate strategy duplicates an existing one."""
+            # Level 1: param fingerprint
+            cand_sp = candidate.get("suggested_params")
+            if cand_sp and isinstance(cand_sp, dict):
+                sig = json.dumps(cand_sp, sort_keys=True, default=str)
+                if sig in existing_param_sigs:
+                    return True
+            # Level 2: exact text
+            cand_text = candidate.get("text", "")
+            if cand_text in existing_texts:
+                return True
+            # Level 3: fuzzy text match
+            if cand_text and existing_texts:
+                from difflib import SequenceMatcher  # noqa: PLC0415
+
+                if any(SequenceMatcher(None, cand_text, et).ratio() > 0.8 for et in existing_texts):
+                    return True
+            return False
+
+        return [s for s in candidates if not _is_duplicate(s)]
+
+    new_strategies = _dedup_3level(strategies, existing_strategies)
 
     if new_strategies:
         meta_path = _get_task_meta_path()
