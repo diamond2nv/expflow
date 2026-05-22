@@ -16,7 +16,10 @@ from typing import Any
 
 logger = logging.getLogger("expflow_pde.goal_orchestrator")
 
-_PROGRESS_PATH = os.path.expanduser("~/.expflow/progress_state.json")
+_PROGRESS_PATH = os.path.join(
+    os.environ.get("EXPFLOW_HOME", os.path.expanduser("~/.expflow")),
+    "progress_state.json",
+)
 
 
 def _write_with_flock(state: dict[str, Any], path: str) -> None:
