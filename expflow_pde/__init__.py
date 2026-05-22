@@ -53,6 +53,8 @@ def __getattr__(name: str):
         "scheduler_start": ("expflow_pde.clearml", "scheduler_start"),
         # pipeline
         "ExperimentPipeline": ("expflow_pde.pipeline", "ExperimentPipeline"),
+        # semantic client (stdlib only — no optional deps)
+        "SemanticClient": ("expflow_pde.semantic_client", "SemanticClient"),
     }
     if name in _lazy_map:
         mod_path, attr = _lazy_map[name]
