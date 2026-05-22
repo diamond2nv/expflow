@@ -210,7 +210,7 @@ def run_hpo(
     constraints: dict[str, Any] | None = None,
     failures: list[dict[str, Any]] | None = None,
     use_combined_score: bool = False,
-    param_prefix: str = "Args/--",
+    param_prefix: str = "Args/",
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -389,7 +389,7 @@ def _run_hpo_distributed(
     pruner: str | None = "hyperband",
     loss: str | None = None,
     use_combined_score: bool = False,
-    param_prefix: str = "Args/--",
+    param_prefix: str = "Args/",
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode)."""
     from clearml import Task
@@ -595,14 +595,14 @@ def _run_hpo_optimizer(
     project: str,
     loss: str | None = None,
     use_combined_score: bool = False,
-    param_prefix: str = "Args/--",
+    param_prefix: str = "Args/",
 ) -> dict[str, Any]:
     """Run HPO via ClearML HyperParameterOptimizer.
 
     Args:
         param_prefix: Prefix for parameter keys. The base task uses one of:
-            "Args/--" (argparse with -- prefix) or "Args/" (clearml Args section).
-            Default "Args/--". Override to "Args/" for tasks without -- prefix.
+            "Args/" (clearml Args section, standard) or "Args/--" (with -- prefix).
+            Default "Args/".
     """
     from clearml import Task
     from clearml.automation import (
