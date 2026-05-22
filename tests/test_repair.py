@@ -286,7 +286,7 @@ class TestRepairStageWikiMapping:
         )
         if result["level"] == "L2":
             assert "wiki_source" in result
-            assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "semantic", "none")
+            assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "none")
 
 
 class TestResolveRepairOutput:
@@ -374,98 +374,138 @@ class TestRepairStageWordMatch:
         assert any("disk-space" in p for p in paths)
 
 
-class TestRepairStageSemanticClassify:
-    """Semantic sidecar classification in _exc_type_to_wiki (L2 path only)."""
+class TestRepairStageL2SemanticEnrichment:
+    """SemanticContext enrichment in L2 (Phase 3: sidecar in subagent prompt)."""
 
     def _make_stage(self):
         from expflow_pde.repair import RepairStage
         return RepairStage()
 
-    def test_semantic_classify_sidecar_ok(self, monkeypatch):
-        """When sidecar is reachable and returns a valid concept, use it."""
-        stage = self._make_stage()
+    def _mock_client(self, classify_returns=None, similarity_returns=None):
+        """Factory: returns a mock SemanticClient with configurable returns."""
 
         class _MockClient:
             def check_health(self):
                 return {"status": "ok"}
 
             def classify(self, text, concepts):
-                # Return the timeout label with high score
+                if classify_returns is not None:
+                    return classify_returns
                 for label in concepts:
-                    if "Timeout" in label:
-                        return {"scores": {label: 0.85}, "top_concept": label, "top_score": 0.85}
+                    if "CUDA runtime" in label:
+                        return {
+                            "scores": {label: 0.82},
+                            "top_concept": label,
+                            "top_score": 0.82,
+                        }
                 return {"scores": {}, "top_concept": "", "top_score": 0.0}
 
+            def similarity(self, a, b):
+                if similarity_returns is not None:
+                    return similarity_returns
+                return 0.72
+
+        return _MockClient()
+
+    def test_l2_semantic_context_present_when_sidecar_ok(self, monkeypatch):
+        """When sidecar is reachable, L2 result includes non-empty semantic_context."""
+        stage = self._make_stage()
         monkeypatch.setattr(
             "expflow_pde.semantic_client.SemanticClient",
-            lambda base_url=None: _MockClient(),
+            lambda base_url=None: self._mock_client(),
         )
 
-        result = stage._exc_type_to_wiki("RuntimeError: training timed out after 7200s")
-        assert result["source"] == "semantic"
-        assert any("timeouts" in p for p in result["paths"])
+        log = "Traceback (most recent call last):\nRuntimeError: CUDA error: an illegal memory access was encountered"
+        result = stage.run(log, 1, enable_reflection=True)
 
-    def test_semantic_classify_sidecar_unreachable(self, monkeypatch):
-        """When sidecar is unreachable, fall through to keyword fallback."""
+        assert result["level"] == "L2"
+        assert result.get("semantic_context", "") != ""
+        assert "CUDA runtime" in result["semantic_context"]
+        # subagent_prompt should contain the ## Semantic Context section
+        assert "## Semantic Context" in result.get("subagent_prompt", "")
+
+    def test_l2_semantic_context_empty_when_sidecar_unreachable(self, monkeypatch):
+        """When sidecar is unreachable, L2 result has empty semantic_context."""
         stage = self._make_stage()
 
-        class _UnreachableClient:
+        class _Unreachable:
             def check_health(self):
                 return None
 
             def classify(self, text, concepts):
                 raise OSError("Connection refused")
 
+            def similarity(self, a, b):
+                raise OSError("Connection refused")
+
         monkeypatch.setattr(
             "expflow_pde.semantic_client.SemanticClient",
-            lambda base_url=None: _UnreachableClient(),
+            lambda base_url=None: _Unreachable(),
         )
 
-        # This would normally match keyword fallback
-        result = stage._exc_type_to_wiki("RuntimeError: CUDA OOM")
-        assert result["source"] == "fallback"
-        assert any("gpu-memory" in p for p in result["paths"])
+        log = "Traceback:\nRuntimeError: CUDA error"
+        result = stage.run(log, 1, enable_reflection=True)
 
-    def test_semantic_classify_low_confidence(self, monkeypatch):
-        """Low-confidence concepts should not override keyword fallback."""
+        assert result["level"] == "L2"
+        assert result.get("semantic_context", "") == ""
+        # subagent_prompt should NOT contain ## Semantic Context
+        assert "## Semantic Context" not in result.get("subagent_prompt", "")
+
+    def test_l2_semantic_context_empty_low_confidence(self, monkeypatch):
+        """Low-confidence classify returns empty semantic_context."""
         stage = self._make_stage()
 
-        class _LowConfClient:
-            def check_health(self):
-                return {"status": "ok"}
-
-            def classify(self, text, concepts):
-                return {"scores": {"Timeout": 0.15}, "top_concept": "Timeout", "top_score": 0.15}
-
         monkeypatch.setattr(
             "expflow_pde.semantic_client.SemanticClient",
-            lambda base_url=None: _LowConfClient(),
+            lambda base_url=None: self._mock_client(
+                classify_returns={"scores": {"Timeout": 0.12}, "top_concept": "Timeout", "top_score": 0.12},
+                similarity_returns=0.05,
+            ),
         )
 
-        # Low confidence (<0.2) should not accept semantic result
-        result = stage._exc_type_to_wiki("RuntimeError: unknown glitch")
-        assert result["source"] != "semantic"
+        log = "Traceback:\nValueError: something obscure"
+        result = stage.run(log, 1, enable_reflection=True)
 
-    def test_semantic_classify_fallback_on_exception(self, monkeypatch):
-        """Any exception in sidecar should gracefully fall through."""
+        assert result["level"] == "L2"
+        # Bottom confidence threshold is 0.25, so 0.12 should be rejected
+        assert result.get("semantic_context", "") == ""
+        assert "## Semantic Context" not in result.get("subagent_prompt", "")
+
+    def test_l2_semantic_context_from_signal_exit(self, monkeypatch):
+        """Signal exit (137) should also get semantic enrichment."""
         stage = self._make_stage()
-
-        class _BrokenClient:
-            def check_health(self):
-                raise RuntimeError("sidecar crashed")
-
-            def classify(self, text, concepts):
-                return None
-
         monkeypatch.setattr(
             "expflow_pde.semantic_client.SemanticClient",
-            lambda base_url=None: _BrokenClient(),
+            lambda base_url=None: self._mock_client(
+                classify_returns={
+                    "scores": {"Process killed by OOM killer": 0.91},
+                    "top_concept": "Process killed by OOM killer",
+                    "top_score": 0.91,
+                },
+                similarity_returns=0.88,
+            ),
         )
 
-        result = stage._exc_type_to_wiki("RuntimeError: unknown glitch")
-        # Should still hit keyword fallback, which returns [] for unknown
-        assert result["source"] == "none"
-        assert len(result["paths"]) == 0
+        log = "Killed\nOut of memory\n"
+        result = stage.run(log, 137, enable_reflection=True)
+
+        assert result["level"] == "L2"
+        assert result.get("semantic_context", "") != ""
+        assert "OOM killer" in result["semantic_context"]
+        assert "## Semantic Context" in result.get("subagent_prompt", "")
+
+    def test_l2_semantic_context_no_sidecar_at_all(self):
+        """Without mocking, sidecar is unreachable → empty context (production fallback)."""
+        from expflow_pde.repair import RepairStage
+
+        stage = RepairStage()
+        log = "Traceback:\nRuntimeError: obscure CUDA driver error"
+        result = stage.run(log, 1, enable_reflection=True)
+
+        assert result["level"] == "L2"
+        # In production with no sidecar running, semantic_context is empty
+        assert result.get("semantic_context", "") == ""
+        assert "## Semantic Context" not in result.get("subagent_prompt", "")
 
 
 class TestRepairStageFixParams:

@@ -23,23 +23,6 @@ from expflow_pde.repair_rules import match_first
 
 logger = logging.getLogger("expflow_pde.repair")
 
-# ── Wiki categories for semantic classification ──
-# Maps descriptive natural-language labels to wiki page paths.
-# Used by _try_semantic_classify() when the sidecar is reachable.
-_WIKI_LABEL_TO_PAGE: dict[str, str] = {
-    "GPU memory exhaustion — CUDA OOM, nvrtc errors, GPU out of memory": "gpu-memory.md",
-    "OOM killer — process killed by system due to memory usage": "oom-killer.md",
-    "Shared memory capacity — /dev/shm too small, bus errors": "shared-memory.md",
-    "Disk space — no space left on device, storage exhausted": "disk-space.md",
-    "Timeout — step timeout, pipeline timeout, training stall": "timeouts.md",
-    "Segmentation fault — memory corruption, kernel crash": "segfault.md",
-    "Abort signal — assertion failure, critical error": "abort.md",
-    "Python dependency — ModuleNotFoundError, ImportError, pip conflict": "pip-dependencies.md",
-    "Dataset path — FileNotFoundError, data not found": "data-paths.md",
-    "DataLoader — worker crash, multiprocessing issue": "data-loader.md",
-    "CUDA runtime — cuFFT error, CUDA driver issue, GPU communication": "gpu-memory.md",
-}
-
 # ── Constants ──
 
 MAX_L1_ATTEMPTS = 2  # Max L1 quick-fix attempts before escalating to L2
@@ -379,6 +362,13 @@ class RepairStage:
         wiki_paths = wiki_info.get("paths", [])
         wiki_source = wiki_info.get("source", "none")
 
+        # Phase 3: Semantic sidecar enrichment (graceful fallback)
+        semantic_context = self._enrich_l2_with_semantics(
+            exc_type,
+            exc_message,
+            tb_lines[:20],
+        )
+
         # Render the subagent prompt with structured context
         context = {
             "experiment_id": self._exp_id,
@@ -387,6 +377,7 @@ class RepairStage:
             "exc_message": exc_message,
             "files_to_check": files_to_check,
             "wiki_paths": wiki_paths,
+            "semantic_context": semantic_context,
             "tb_snippet": tb_lines[:20],
         }
         prompt = self._render_l2_prompt(context)
@@ -404,6 +395,7 @@ class RepairStage:
             "files_to_check": files_to_check or [],
             "wiki_paths": wiki_paths or [],
             "wiki_source": wiki_source,
+            "semantic_context": semantic_context or "",
             "tb_snippet": tb_lines[:20],
             "subagent_prompt": prompt,
             "subagent_schema": {
@@ -455,9 +447,7 @@ class RepairStage:
 
         Returns dict with keys:
             paths: list[str] — wiki file paths
-            source: str — "exact" | "prefix" | "substring" | "semantic" | "fallback" | "none"
-
-        Priority order: exact match > prefix > substring > semantic (L2 only) > keyword fallback
+            source: str — "exact" | "prefix" | "substring" | "fallback" | "none"
         """
         if not exc_type or exc_type == "Unknown":
             return {"paths": [], "source": "none"}
@@ -470,65 +460,90 @@ class RepairStage:
             if entry["match"] == "substring" and entry["key"] in exc_type:
                 return {"paths": list(entry["paths"]), "source": "substring"}
 
-        # Semantic classification (sidecar) — only attempt when no exact/prefix/substring match
-        semantic_paths = self._try_semantic_classify(exc_type, exc_message)
-        if semantic_paths:
-            return {"paths": semantic_paths, "source": "semantic"}
         # Fallback — content-based classification for no explicit key matched
         paths = self._CLASSIFY_EXC(exc_type, exc_message)
         if paths:
             return {"paths": paths, "source": "fallback"}
         return {"paths": [], "source": "none"}
 
-    def _try_semantic_classify(self, exc_type: str, exc_message: str = "") -> list[str]:
-        """Use SemanticClient sidecar to classify an unknown exception type.
+    @staticmethod
+    def _word_in(combined: str, word: str) -> bool:
+        """Case-insensitive whole-word match (\\b boundaries)."""
+        return bool(_re.search(r"\b" + _re.escape(word) + r"\b", combined))
 
-        Falls back gracefully to empty list if the sidecar is unreachable
-        or the classify endpoint returns no meaningful match.
+    # ── Phase 3: Semantic sidecar enrichment for L2 subagent ──
 
-        Args:
-            exc_type: Exception type string (e.g. 'RuntimeError').
-            exc_message: Exception message text.
+    _SEMANTIC_CONCEPTS: list[str] = [
+        "GPU out of memory — CUDA allocator, nvrtc errors, or GPU capacity exhaustion",
+        "Process killed by OOM killer — system ran out of RAM/swap",
+        "Shared memory insufficient — /dev/shm too small for DataLoader workers",
+        "Disk space full — no space left on device, storage quota exceeded",
+        "Step timeout — training step exceeded time limit, pipeline timeout",
+        "Memory corruption — segmentation fault, null pointer, undefined behaviour",
+        "Abort signal — assertion failure, critical library error",
+        "Missing Python module — ModuleNotFoundError, ImportError, pip dependency",
+        "File not found — dataset path wrong, data file missing",
+        "DataLoader crash — multiprocessing worker died, shared memory issue",
+        "CUDA runtime error — cuFFT failed, CUDA driver issue, GPU communication",
+    ]
 
-        Returns:
-            List of wiki page filenames (e.g. ['gpu-memory.md']), or empty list.
+    def _enrich_l2_with_semantics(
+        self, exc_type: str, exc_message: str, tb_snippet: list[str]
+    ) -> str:
+        """Query the semantic sidecar for failure-classification context.
+
+        Returns a human-readable markdown block for the L2 subagent prompt,
+        or an empty string if the sidecar is unreachable or returns nothing useful.
+
+        The result tells the L2 subagent what *type* of failure this is
+        semantically, beyond what keyword matching can detect.
         """
         if not exc_type or exc_type == "Unknown":
-            return []
+            return ""
         try:
             from expflow_pde.semantic_client import SemanticClient  # noqa: PLC0415
 
             client = SemanticClient()
             if client.check_health() is None:
-                logger.debug("Semantic sidecar unreachable — skipping semantic classify")
-                return []
-            text = f"{exc_type}: {exc_message}" if exc_message else exc_type
-            result = client.classify(text, list(_WIKI_LABEL_TO_PAGE.keys()))
-            if result is None:
-                return []
-            top_label = result.get("top_concept", "")
-            top_score = result.get("top_score", 0.0)
-            # Only accept if confidence is reasonable (>0.2)
-            if top_label and top_score is not None and float(top_score) > 0.2:
-                page = _WIKI_LABEL_TO_PAGE.get(top_label)
-                if page:
-                    logger.debug(
-                        "Semantic classify: exc=%s → %s (score=%.3f)",
-                        exc_type, page, float(top_score),
-                    )
-                    return [f"~/wiki/troubleshooting/{page}"]
-            logger.debug(
-                "Semantic classify: exc=%s → low confidence score=%.3f, label=%s",
-                exc_type, float(top_score or 0), top_label,
-            )
-        except Exception as exc:
-            logger.debug("Semantic classify failed for %s: %s", exc_type, exc)
-        return []
+                logger.debug("L2 semantic enrichment: sidecar unreachable")
+                return ""
 
-    @staticmethod
-    def _word_in(combined: str, word: str) -> bool:
-        """Case-insensitive whole-word match (\\b boundaries)."""
-        return bool(_re.search(r"\b" + _re.escape(word) + r"\b", combined))
+            # Classify the exception against known failure concepts
+            text = f"{exc_type}: {exc_message}" if exc_message else exc_type
+            result = client.classify(text, self._SEMANTIC_CONCEPTS)
+            if result is None:
+                return ""
+
+            top_concept = result.get("top_concept", "")
+            top_score = result.get("top_score", 0.0)
+            if not top_concept or top_score is None or float(top_score) < 0.25:
+                logger.debug(
+                    "L2 semantic enrichment: low confidence (%.3f) for %s",
+                    float(top_score or 0), exc_type,
+                )
+                return ""
+
+            # Compute similarity between the first traceback line and known templates
+            tb_sim_hint = ""
+            first_tb = next((l for l in tb_snippet if "File" in l or "Error" in l), exc_type)
+            sim_result = client.similarity(first_tb, text)
+            if sim_result is not None and float(sim_result) > 0.15:
+                tb_sim_hint = f"\n- Traceback-topic similarity: {float(sim_result):.3f}"
+
+            context_block = (
+                "This failure was classified by semantic similarity as:\n"
+                f"- **Top match**: {top_concept} (score={float(top_score):.3f}){tb_sim_hint}\n"
+                "- Use this as a hint for root-cause analysis below."
+            )
+            logger.debug(
+                "L2 semantic enrichment: exc=%s → %s (score=%.3f)",
+                exc_type, top_concept, float(top_score),
+            )
+            return context_block
+
+        except Exception as exc:
+            logger.debug("L2 semantic enrichment failed for %s: %s", exc_type, exc)
+            return ""
 
     @staticmethod
     def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:  # noqa: N802
@@ -607,44 +622,58 @@ class RepairStage:
         files_str = "\n".join(f"  - {f}" for f in context.get("files_to_check", []))
         wiki_str = "\n".join(f"  - {w}" for w in context.get("wiki_paths", []))
 
-        return (
-            "Analyze this experiment failure and produce a fix plan.\n"
-            "\n"
-            "## Failure Context\n"
-            f"Experiment ID: {context.get('experiment_id', '?')}\n"
-            f"Exit code: {context.get('exit_code', 1)}\n"
-            f"Exception: {context.get('exc_type', 'Unknown')}\n"
-            f"Message: {context.get('exc_message', '')}\n"
-            "\n"
-            "## Traceback\n"
-            f"{tb_str}\n"
-            "\n"
-            "## Files Involved\n"
-            f"{files_str}\n"
-            "\n"
-            "## Wiki Context\n"
-            f"{wiki_str}\n"
-            "\n"
-            "## Task\n"
-            "1. Identify the root cause.\n"
-            "2. Determine which files need changes and what the changes are.\n"
-            "3. Return a fix plan as VALID JSON using this EXACT schema:\n"
-            "\n"
-            "   {\n"
-            '     "plan_type": "fix",\n'
-            '     "files": [{"path": "train.py", "old": "...", "new": "..."}],\n'
-            '     "reasoning": "one-line explanation"\n'
-            "   }\n"
-            "\n"
-            "   If you CANNOT determine the fix, return:\n"
-            "   {\n"
-            '     "plan_type": "no_plan",\n'
-            '     "reason": "why you cannot produce a fix"\n'
-            "   }\n"
-            "\n"
-            "   OUTPUT ONLY THE JSON BLOCK — no markdown fences, no extra text.\n"
-            "   Do NOT apply changes directly. Do NOT run code.\n"
-        )
+        # Optional semantic context from sidecar (empty string if unavailable)
+        sem = context.get("semantic_context", "")
+
+        segments = [
+            "Analyze this experiment failure and produce a fix plan.",
+            "",
+            "## Failure Context",
+            f"Experiment ID: {context.get('experiment_id', '?')}",
+            f"Exit code: {context.get('exit_code', 1)}",
+            f"Exception: {context.get('exc_type', 'Unknown')}",
+            f"Message: {context.get('exc_message', '')}",
+            "",
+            "## Traceback",
+            tb_str,
+            "",
+            "## Files Involved",
+            files_str,
+            "",
+            "## Wiki Context",
+            wiki_str,
+        ]
+
+        # Inject semantic context if available — this is the Phase 3 enhancement
+        if sem:
+            segments.append("")
+            segments.append("## Semantic Context")
+            segments.append(sem)
+            segments.append("")
+
+        segments.extend([
+            "## Task",
+            "1. Identify the root cause.",
+            "2. Determine which files need changes and what the changes are.",
+            "3. Return a fix plan as VALID JSON using this EXACT schema:",
+            "",
+            "   {",
+            '     "plan_type": "fix",',
+            '     "files": [{"path": "train.py", "old": "...", "new": "..."}],',
+            '     "reasoning": "one-line explanation"',
+            "   }",
+            "",
+            "   If you CANNOT determine the fix, return:",
+            "   {",
+            '     "plan_type": "no_plan",',
+            '     "reason": "why you cannot produce a fix"',
+            "   }",
+            "",
+            "   OUTPUT ONLY THE JSON BLOCK — no markdown fences, no extra text.",
+            "   Do NOT apply changes directly. Do NOT run code.",
+        ])
+
+        return "\n".join(segments)
 
     # ── Internal helpers ──
 
@@ -672,6 +701,7 @@ class RepairStage:
                 "files_to_check",
                 "wiki_paths",
                 "wiki_source",
+                "semantic_context",
                 "tb_snippet",
                 "subagent_prompt",
                 "subagent_schema",
