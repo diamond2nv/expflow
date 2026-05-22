@@ -39,7 +39,17 @@ Mode C — **custom skip**:
 
 from __future__ import annotations
 
+from expflow_pde.hpo import get_study_best_params, cond_search_space, combined_score
 from typing import Any
+
+
+def _try_float(v: str) -> float | str:
+    """Try parsing a string as float; return the string if it fails."""
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return v
+
 
 DEFAULT_PIPELINE_VERSION = "0.1.0"
 
@@ -420,16 +430,25 @@ class ExperimentPipeline:
     def _get_hpo_best_params(self, study_name: str) -> dict[str, Any] | None:
         """Look up best parameters from a completed Optuna study.
 
-        Args:
-            study_name: Optuna study name.
+        Cleans the raw params: strips Args/ prefix, auto-casts string
+        values to float where possible. This prevents downstream
+        `**best_params` from receiving invalid keys like 'Args/--lr'.
 
         Returns:
-            Dict of best params, or None if not found.
+            Dict of clean best params, or None if not found.
         """
         try:
-            from expflow_pde.hpo import get_study_best_params
-
-            return get_study_best_params(study_name)
+            raw = get_study_best_params(study_name)
+            if raw is None:
+                return None
+            clean: dict[str, Any] = {}
+            for k, v in raw.items():
+                key = k.removeprefix("Args/").removeprefix("--")
+                if isinstance(v, str):
+                    clean[key] = _try_float(v)
+                else:
+                    clean[key] = v
+            return clean
         except Exception:
             return None
 

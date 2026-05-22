@@ -95,7 +95,7 @@ def test_diagnose_stable(stable_eval_json):
 
 
 def test_suggest_long_term_collapse():
-    """Seg3 collapse -> n_modes + sub_step + wd."""
+    """Seg3 collapse -> n_modes bias + sub_step fixed + wd bias."""
     from expflow_pde.analyze import suggest_next_params
 
     diagnosis = {
@@ -107,14 +107,18 @@ def test_suggest_long_term_collapse():
     }
     hp = {"n_modes": 12, "hidden_channels": 20, "lr": 0.001}
     result = suggest_next_params(diagnosis, current_hparams=hp)
-    assert result["suggested_params"]["n_modes"] == 16  # 12+4
-    assert result["suggested_params"]["num_sub_steps"] == 5
-    assert result["suggested_params"].get("weight_decay") == 1e-4
+    assert "search_bias" in result
+    assert "fixed_params" in result
+    # n_modes bias: low=16 (12+4), high=24
+    assert result["search_bias"]["n_modes"]["low"] == 16
+    assert result["search_bias"]["n_modes"]["high"] == 24
+    assert result["fixed_params"]["num_sub_steps"] == 5
+    assert "weight_decay" in result["search_bias"]  # bias, not fixed
     assert "rationale" in result
 
 
 def test_suggest_already_has_wd():
-    """If weight_decay already set, don't override."""
+    """If weight_decay already set, don't add to search_bias."""
     from expflow_pde.analyze import suggest_next_params
 
     diagnosis = {
@@ -126,11 +130,11 @@ def test_suggest_already_has_wd():
     }
     hp = {"n_modes": 12, "weight_decay": 1e-5}
     result = suggest_next_params(diagnosis, current_hparams=hp)
-    assert "weight_decay" not in result["suggested_params"]
+    assert "weight_decay" not in result["search_bias"]
 
 
 def test_suggest_mid_term():
-    """Medium-term drop -> stability_lambda."""
+    """Medium-term drop -> stability_lambda bias."""
     from expflow_pde.analyze import suggest_next_params
 
     diagnosis = {
@@ -141,11 +145,13 @@ def test_suggest_mid_term():
         "total": 54.0,
     }
     result = suggest_next_params(diagnosis, current_hparams={"lr": 0.001})
-    assert result["suggested_params"].get("stability_lambda") == 0.001
+    assert "stability_lambda" in result["search_bias"]
+    assert result["search_bias"]["stability_lambda"]["low"] == 0.0005
+    assert result["search_bias"]["stability_lambda"]["high"] == 0.005
 
 
 def test_suggest_stable():
-    """Stable -> HPO round recommended."""
+    """Stable -> no bias, just rationale."""
     from expflow_pde.analyze import suggest_next_params
 
     diagnosis = {
@@ -156,11 +162,13 @@ def test_suggest_stable():
         "total": 85,
     }
     result = suggest_next_params(diagnosis, current_hparams={})
-    assert "hpo" in result["suggested_params"].get("tag", "")
+    assert result["search_bias"] == {}
+    assert result["fixed_params"] == {}
+    assert "stable" in result["rationale"][0].lower()
 
 
 def test_suggest_short_term():
-    """Short-term weak -> higher lr + more epochs."""
+    """Short-term weak -> higher lr bias range + epochs bias."""
     from expflow_pde.analyze import suggest_next_params
 
     diagnosis = {
@@ -171,8 +179,11 @@ def test_suggest_short_term():
         "total": 50.0,
     }
     result = suggest_next_params(diagnosis, current_hparams={"lr": 0.001, "epochs": 80})
-    assert result["suggested_params"]["lr"] == 0.002
-    assert result["suggested_params"]["epochs"] == 100
+    assert "lr" in result["search_bias"]
+    assert result["search_bias"]["lr"]["low"] == 0.0005
+    assert result["search_bias"]["lr"]["high"] == 0.002
+    assert "epochs" in result["search_bias"]
+    assert result["search_bias"]["epochs"]["low"] == 100
 
 
 # ── CLI tests ──

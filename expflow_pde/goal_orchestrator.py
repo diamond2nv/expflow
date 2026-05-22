@@ -28,6 +28,8 @@ Interface:
 
 from __future__ import annotations
 
+import copy
+import datetime
 import json
 import logging
 import os
@@ -254,13 +256,13 @@ def load() -> dict[str, Any]:
     path = _get_state_path()
     raw = _read_with_flock(path)
     if raw is None:
-        return dict(_DEFAULTS)
+        return {k: copy.deepcopy(v) for k, v in _DEFAULTS.items()}
 
     # Strip unknown keys from persisted state
     raw = {k: v for k, v in raw.items() if k in _INTERFACE_KEYS or (k.startswith("_") and all(c.isascii() for c in k))}
 
-    # Safe merge
-    result = dict(_DEFAULTS)
+    # Deep copy to prevent test-to-test mutation of _DEFAULTS mutable containers
+    result = {k: copy.deepcopy(v) for k, v in _DEFAULTS.items()}
     result.update(raw)
 
     phase = result.get("current_phase", "idle")
@@ -421,3 +423,40 @@ def clear() -> None:
             logger.info("GoalOrchestrator cleared")
         except OSError as e:
             logger.warning("GoalOrchestrator failed to clear: %s", e)
+
+
+# ── Failure query for HPO integration ──
+
+
+def get_active_failures(max_age_hours: float = 24.0) -> list[dict[str, Any]]:
+    """Return recent OOM/signal failures from the persistent state.
+
+    Filters to failures of type 'oom' or 'signal' within max_age_hours.
+    Used by hpo.cond_search_space() to suppress capacity-increasing params.
+
+    Args:
+        max_age_hours: Max age in hours for a failure to be considered active.
+
+    Returns:
+        List of failure dicts (deduplicated by type+param keys).
+    """
+    state = load()
+    failures = state.get("learned_failures", [])
+    if not failures:
+        return []
+
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=max_age_hours)
+    active: list[dict[str, Any]] = []
+    for f in failures:
+        if f.get("type") not in ("oom", "signal"):
+            continue
+        ts = f.get("_saved_at", "")
+        if ts:
+            try:
+                saved = datetime.datetime.fromisoformat(ts)
+                if saved < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        active.append(f)
+    return active

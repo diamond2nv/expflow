@@ -198,7 +198,8 @@ class TestDummyGameWithDiagnose:
                 "total_mse": 0.0,
             }
             suggestion = suggest_next_params(diag, task_id="task1")
-            assert "suggested_params" in suggestion
+            assert isinstance(suggestion, dict)
+            assert "search_bias" in suggestion
             assert "rationale" in suggestion
 
     def test_diagnose_detects_ceiling(self, tmp_path):

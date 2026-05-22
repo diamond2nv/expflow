@@ -8,14 +8,17 @@ Supports three modes:
 3. **HyperParameterOptimizer** (recommended for production): uses ClearML's
    native Optuna integration — auto-creates/clones/enqueues tasks.
 
+v0.9.0 enhancements:
+- combined_score(): competition-aware objective (seg_total × 0.75 + time_score)
+- cond_search_space(): narrow HPO ranges using diagnosis bias + OOM history
+- best_params clean: strip Args/ prefix, auto-cast strings to float
+
 The training script must:
 - Accept hyperparameters as CLI arguments: `--lr=0.001 --epochs=80`
 - Report metrics via clearml `Task.report_scalar()` for objective collection
+  (REQUIRED for mode 3 — HyperParameterOptimizer reads scalar metrics)
+- Report training wall time as `train_time_minutes` scalar for combined_score
 - Or output METRIC:<name>=<value> to stdout for local mode
-
-Phase 11 enhancements:
-- Optuna HyperbandPruner for early stopping of poor trials
-- ClearML HyperParameterOptimizer native integration (mode 3)
 """
 
 from __future__ import annotations
@@ -27,6 +30,99 @@ import subprocess
 import sys
 import time
 from typing import Any
+
+# ── Combined score: seg_total + train_time ──
+
+COMBINED_SEG_WEIGHT: float = 0.75
+COMBINED_TIME_MAX: float = 60.0  # minutes
+COMBINED_TIME_FULL_SCORE: float = 35.0
+COMBINED_TIME_DECAY_WINDOW: float = 120.0  # minutes beyond max → 0
+
+
+def combined_score(seg_total: float, train_minutes: float) -> float:
+    """Compute competition-style combined score.
+
+    Total = seg_total * 0.75 + train_time_score + inference_time_score
+    At HPO time we only have train_time; infer_time is assumed 0 for ranking.
+    
+    Args:
+        seg_total: seg_total from eval (0-150ish).
+        train_minutes: training wall time in minutes.
+
+    Returns:
+        Combined score (higher is better).
+    """
+    time_score = COMBINED_TIME_FULL_SCORE
+    if train_minutes > COMBINED_TIME_MAX:
+        excess = train_minutes - COMBINED_TIME_MAX
+        decay = max(0.0, 1.0 - excess / COMBINED_TIME_DECAY_WINDOW)
+        time_score = COMBINED_TIME_FULL_SCORE * decay
+    return seg_total * COMBINED_SEG_WEIGHT + time_score
+
+
+# ── Conditional search space ──
+
+
+def cond_search_space(
+    base_space: dict[str, dict[str, Any]] | None = None,
+    bias: dict[str, dict[str, float]] | None = None,
+    constraints: dict[str, Any] | None = None,
+    failures: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Conditional search space: narrow ranges based on diagnosis and history.
+
+    Args:
+        base_space: Default search space (uses _DEFAULT_SEARCH_SPACE if None).
+        bias: From suggest_next_params — dict of {param: {"low": ..., "high": ...}}
+              indicating where to focus sampling.
+        constraints: Time budget etc. {"max_train_minutes": float}.
+        failures: From GoalOrchestrator.load()["learned_failures"].
+                  Type "oom" suppresses capacity-increasing params.
+
+    Returns:
+        Modified search space with narrowed ranges and suppressed params.
+    """
+    space = dict(base_space or _DEFAULT_SEARCH_SPACE)
+
+    # Step 1: Apply diagnosis bias (narrow ranges)
+    if bias:
+        for param_name, bounds in bias.items():
+            if param_name not in space:
+                continue
+            low = bounds.get("low")
+            high = bounds.get("high")
+            spec = dict(space[param_name])
+            if low is not None:
+                spec["low"] = float(low) if isinstance(spec["low"], (int, float)) else low
+            if high is not None:
+                spec["high"] = float(high) if isinstance(spec["high"], (int, float)) else high
+            space[param_name] = spec
+
+    # Step 2: Suppress capacity-increasing params after OOM failures
+    if failures:
+        capacity_keys = {"n_modes", "width", "batch_size", "n_layers"}
+        oom_types = {f.get("type", "") for f in failures if f.get("type") in ("oom", "signal")}
+        if oom_types:
+            for key in capacity_keys:
+                if key in space:
+                    spec = dict(space[key])
+                    cur_high = spec.get("high", 999)
+                    # Cap at (low + high) / 2
+                    half = (spec.get("low", 0) + cur_high) / 2.0
+                    spec["high"] = half
+                    space[key] = spec
+
+    # Step 3: Apply time constraints — limit epochs if tight on time
+    if constraints and constraints.get("max_train_minutes"):
+        max_min = constraints["max_train_minutes"]
+        if max_min < 60 and "epochs" in space:
+            spec = dict(space["epochs"])
+            # Cap epochs to stay under time budget
+            spec["high"] = min(spec.get("high", 150), int(max_min * 2))
+            space["epochs"] = spec
+
+    return space
+
 
 # ── Default search space ──
 
@@ -110,6 +206,10 @@ def run_hpo(
     pruner: str | None = "hyperband",
     use_hpo_optimizer: bool = False,
     loss: str | None = None,
+    search_bias: dict[str, dict[str, float]] | None = None,
+    constraints: dict[str, Any] | None = None,
+    failures: list[dict[str, Any]] | None = None,
+    use_combined_score: bool = False,
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -117,6 +217,10 @@ def run_hpo(
     1. **local** (default): subprocess-based, no clearml.
     2. **distributed** (distributed=True): ask/tell + clearml Task clone/enqueue.
     3. **hpo_optimizer** (use_hpo_optimizer=True): ClearML HyperParameterOptimizer.
+
+    v0.9.0: search_bias/constraints/failures narrow the search space via
+    cond_search_space() before sampling. use_combined_score=True makes the
+    objective competition-aware (seg_total × 0.75 + time_score).
 
     Args:
         script: Path to training script.
@@ -133,11 +237,20 @@ def run_hpo(
         project: ClearML project name.
         pruner: Pruner type ('hyperband', 'median', 'percentile', or None).
         use_hpo_optimizer: If True, use clearml HyperParameterOptimizer.
+        search_bias: From suggest_next_params — narrow search ranges.
+        constraints: Time budget etc. {"max_train_minutes": float}.
+        failures: From GoalOrchestrator — OOM suppression.
+        use_combined_score: If True, objective = combined_score(seg_total, train_minutes).
 
     Returns:
         Dict with study metadata and best results.
     """
-    ss = search_space or _DEFAULT_SEARCH_SPACE
+    ss = cond_search_space(
+        base_space=search_space or _DEFAULT_SEARCH_SPACE,
+        bias=search_bias,
+        constraints=constraints,
+        failures=failures,
+    )
 
     if use_hpo_optimizer:
         return _run_hpo_optimizer(
@@ -152,6 +265,7 @@ def run_hpo(
             queue=queue or "default",
             project=project,
             loss=loss,
+            use_combined_score=use_combined_score,
         )
 
     if distributed:
@@ -168,6 +282,7 @@ def run_hpo(
             project=project,
             pruner=pruner,
             loss=loss,
+            use_combined_score=use_combined_score,
         )
 
     return _run_hpo_local(
@@ -182,6 +297,7 @@ def run_hpo(
         timeout_minutes=timeout_minutes,
         pruner=pruner,
         loss=loss,
+        use_combined_score=use_combined_score,
     )
 
 
@@ -200,6 +316,7 @@ def _run_hpo_local(
     timeout_minutes: float | None,
     pruner: str | None = "hyperband",
     loss: str | None = None,
+    use_combined_score: bool = False,
 ) -> dict[str, Any]:
     """Run HPO locally on this machine."""
     optuna = _import_optuna()
@@ -268,6 +385,7 @@ def _run_hpo_distributed(
     project: str,
     pruner: str | None = "hyperband",
     loss: str | None = None,
+    use_combined_score: bool = False,
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode)."""
     from clearml import Task
@@ -332,14 +450,14 @@ def _run_hpo_distributed(
         pending.append((trial, params, trial_task))
 
         while len(pending) >= parallel:
-            collected = _collect_one_trial(study, pending, objective_metric, direction, optuna)
+            collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score)
             if collected is not None:
                 c, f = collected
                 completed += c
                 failed += f
 
     while pending:
-        collected = _collect_one_trial(study, pending, objective_metric, direction, optuna)
+        collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score)
         if collected is not None:
             c, f = collected
             completed += c
@@ -361,8 +479,14 @@ def _collect_one_trial(
     optuna: Any,
     poll_interval: float = 5.0,
     timeout_minutes: float = 60.0,
+    use_combined_score: bool = False,
 ) -> tuple[int, int] | None:
-    """Wait for one pending trial to complete and report its result."""
+    """Wait for one pending trial to complete and report its result.
+
+    When use_combined_score=True, extracts both seg_total and train_time_minutes
+    from the clearml task scalars and computes combined_score() for the objective.
+    Falls back to objective_metric extraction if combined score is unavailable.
+    """
     if not pending:
         return None
 
@@ -379,7 +503,10 @@ def _collect_one_trial(
             if status in ("completed", "failed", "stopped"):
                 trial_obj, param, tsk = pending.pop(i)
                 if status == "completed":
-                    value = _extract_metric_from_task(tsk, objective_metric)
+                    if use_combined_score:
+                        value = _extract_combined_score(tsk)
+                    else:
+                        value = _extract_metric_from_task(tsk, objective_metric)
                     if value is not None:
                         study.tell(trial=trial_obj, values=value)
                         return (1, 0)
@@ -405,6 +532,29 @@ def _extract_metric_from_task(task: Any, metric_name: str) -> float | None:
     return None
 
 
+def _extract_combined_score(task: Any) -> float | None:
+    """Extract combined_score(seg_total, train_minutes) from a clearml task.
+
+    Requires the training script to report both:
+        Task.report_scalar("Score", "seg_total", value)
+        Task.report_scalar("Time", "train_time_minutes", value)
+    """
+    try:
+        scalars = task.get_last_scalar_metrics()
+        seg = None
+        time_min = None
+        for group, metrics in scalars.items():
+            if "seg_total" in metrics:
+                seg = float(metrics["seg_total"]["last"])
+            if "train_time_minutes" in metrics:
+                time_min = float(metrics["train_time_minutes"]["last"])
+        if seg is not None and time_min is not None:
+            return combined_score(seg, time_min)
+        return seg  # fallback to seg_total only
+    except Exception:
+        return None
+
+
 # ── HyperParameterOptimizer (mode 3: ClearML native) ──
 
 
@@ -420,6 +570,7 @@ def _run_hpo_optimizer(
     queue: str,
     project: str,
     loss: str | None = None,
+    use_combined_score: bool = False,
 ) -> dict[str, Any]:
     """Run HPO via ClearML HyperParameterOptimizer.
 

@@ -978,8 +978,10 @@ def suggest_next_params(
 ) -> dict:
     """Suggest next experiment parameters based on diagnosis.
 
-    Uses rule-based suggestions derived from proven strategies
-    (sub_step, stability FT, HyperNOs best practices).
+    v0.9.0: Outputs a search_bias dict (parameter ranges for HPO) instead of
+    discrete parameter values. The caller passes this to cond_search_space()
+    which narrows the Optuna search space accordingly.
+
     Zero token cost — deterministic rules only.
 
     Args:
@@ -988,14 +990,19 @@ def suggest_next_params(
         task_id: Competition task ID (for context).
 
     Returns:
-        Dict with suggested_params, rationale list.
+        Dict with:
+            search_bias: dict of {param: {"low": ..., "high": ...}} for narrowed ranges.
+            fixed_params: dict of {param: value} for non-searchable forced params.
+            rationale: list[str] of human-readable reasoning.
+            degradation_pattern: str.
     """
     pattern = diagnosis.get("degradation_pattern", "stable")
     seg1 = diagnosis.get("seg1", 0)
     seg3 = diagnosis.get("seg3", 0)
 
     hp = dict(current_hparams) if current_hparams else {}
-    suggestions: dict = {}
+    search_bias: dict[str, dict[str, float]] = {}
+    fixed_params: dict[str, Any] = {}
     rationale: list[str] = []
 
     if (
@@ -1009,38 +1016,34 @@ def suggest_next_params(
         )
     ):
         current_modes = int(hp.get("n_modes", 12))
-        suggestions["n_modes"] = min(current_modes + 4, 24)
-        suggestions["num_sub_steps"] = 5
-        suggestions["tag"] = "auto_seg3_fix"
+        search_bias["n_modes"] = {"low": min(current_modes + 4, 24), "high": 24}
+        fixed_params["num_sub_steps"] = 5
         rationale.append(
             f"Seg3 collapse ({seg3:.1f}): Increase n_modes "
-            f"{current_modes}->{suggestions['n_modes']} "
+            f"{current_modes}->[low, 24] "
             "to capture more spatial frequencies"
         )
         rationale.append(
             "Add sub_step=5 to fix dt mismatch between training (0.01) and inference (0.05)"
         )
         if not hp.get("weight_decay"):
-            suggestions["weight_decay"] = 1e-4
-            rationale.append("Add weight_decay=1e-4 (HyperNOs Burgers best practice)")
+            search_bias["weight_decay"] = {"low": 1e-5, "high": 1e-3}
+            rationale.append("Add weight_decay to search (HyperNOs Burgers best practice)")
 
     elif pattern == "mid_term":
-        suggestions["tag"] = "auto_mid_fix"
-        if "stability_lambda" not in hp or not hp.get("stability_lambda"):
-            suggestions["stability_lambda"] = 0.001
-            rationale.append("Seg2 drop: add step-wise stability penalty (stability_lambda=0.001)")
+        search_bias["stability_lambda"] = {"low": 0.0005, "high": 0.005}
+        rationale.append("Seg2 drop: search step-wise stability penalty (stability_lambda)")
 
     elif pattern == "ceiling":
         current_modes = int(hp.get("n_modes", 12))
         current_width = int(hp.get("width", 32))
-        suggestions["n_modes"] = min(current_modes + 4, 24)
-        suggestions["width"] = min(current_width + 16, 64)
-        suggestions["epochs"] = max(int(hp.get("epochs", 80)), 120)
-        suggestions["tag"] = "auto_ceiling_fix"
+        search_bias["n_modes"] = {"low": min(current_modes + 4, 24), "high": 24}
+        search_bias["width"] = {"low": min(current_width + 16, 64), "high": 64}
+        search_bias["epochs"] = {"low": max(int(hp.get("epochs", 80)), 120), "high": 200}
         rationale.append(
             f"Score ceiling detected: increase model capacity "
-            f"(n_modes {current_modes}->{suggestions['n_modes']}, "
-            f"width {current_width}->{suggestions['width']}) "
+            f"(n_modes {current_modes}->[low, 24], "
+            f"width {current_width}->[low, 64]) "
             "to break through plateau"
         )
         rationale.append(
@@ -1050,70 +1053,40 @@ def suggest_next_params(
 
     elif pattern == "short_term":
         current_lr = float(hp.get("lr", 0.001))
-        suggestions["lr"] = min(current_lr * 2, 0.005)
-        suggestions["epochs"] = max(int(hp.get("epochs", 80)), 100)
-        suggestions["tag"] = "auto_short_fix"
+        search_bias["lr"] = {"low": min(current_lr, 0.0005), "high": min(current_lr * 2, 0.005)}
+        search_bias["epochs"] = {"low": max(int(hp.get("epochs", 80)), 100), "high": 200}
         rationale.append(
-            f"Seg1 low ({seg1:.1f}): increase LR "
-            f"{current_lr}->{suggestions['lr']} and extend training"
+            f"Seg1 low ({seg1:.1f}): search LR "
+            f"{search_bias['lr']['low']}->{search_bias['lr']['high']} and extend training"
         )
 
     else:
-        suggestions["tag"] = "auto_hpo_round"
+        # Stable: open up full search
         rationale.append("Experiment stable. Run targeted HPO on remaining strategies.")
 
-    # OOM suppression: prevent capacity increase after recent OOM events
-    suggestions, rationale, was_suppressed = _suppress_oom_params(suggestions, rationale)
-
-    # ── PDE mean gate check ──
-    # If previous experiment's pde_mean exceeded the competition gate (18.09),
-    # bias suggestions toward smoothness-promoting parameters.
-    if diagnosis.get("pde_mean", 0) > 18.09:
-        if "stability_lambda" not in suggestions and "stability_lambda" not in (hp or {}):
-            suggestions["stability_lambda"] = 0.001
-            rationale.append(
-                f"PDE mean gate ({diagnosis.get('pde_mean', 0):.2f} > 18.09): "
-                "add stability_lambda=0.001 to penalize spatial frequency errors"
-            )
-        if "weight_decay" not in suggestions and not hp.get("weight_decay"):
-            suggestions["weight_decay"] = 1e-4
-            rationale.append(
-                "PDE mean exceeded: add weight_decay=1e-4 to regularize high-frequency predictions"
-            )
-
-    # ── Rejected hypothesis check ──
+    # Rejected hypothesis check
     rejected = _get_rejected_directions()
-    skip_happened = was_suppressed
-    if rejected and suggestions:
+    if rejected and search_bias:
         for rej in rejected:
             rej_params = rej.get("suggested_params", {})
             if not rej_params:
                 continue
-            # Check parameter overlap: >60% keys match = same direction
-            matched_keys = set(rej_params.keys()) & set(suggestions.keys())
+            matched_keys = set(rej_params.keys()) & set(search_bias.keys())
             if matched_keys and len(matched_keys) >= max(1, len(rej_params) * 0.6):
                 rationale.append(
                     f"[REJECTED SKIP] Params overlap with rejected hypothesis "
                     f"'{rej.get('id', '?')}': {rej.get('hypothesis', '')[:60]}"
                 )
                 for k in matched_keys:
-                    suggestions.pop(k, None)
-                if "tag" in suggestions:
-                    suggestions["tag"] = str(suggestions["tag"]) + "_skip_rejected"
-                skip_happened = True
-                break
+                    search_bias.pop(k, None)
 
-    # If OOM or rejected caused all non-tag params to be removed, add fallback
-    if skip_happened:
-        suggestion_keys = {k for k in suggestions if k != "tag"}
-        if not suggestion_keys:
-            suggestions["lr"] = 0.001
-            suggestions["epochs"] = 80
-            suggestions["tag"] = "auto_fallback"
-            rationale.append("All suggestions suppressed/rejected. Running fallback HPO round.")
+    # If all bias was removed, add a fallback
+    if not search_bias:
+        rationale.append("All suggestions suppressed/rejected. Running fallback HPO round.")
 
     return {
-        "suggested_params": suggestions,
+        "search_bias": search_bias,
+        "fixed_params": fixed_params,
         "rationale": rationale,
         "task_id": task_id,
         "degradation_pattern": pattern,
