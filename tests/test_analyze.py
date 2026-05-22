@@ -309,3 +309,65 @@ class TestListAllEquationsSummary:
             assert e["dim"]
             assert e["difficulty"]
             assert e["competition_task"] is not None
+
+
+class TestCrossTaskTransfer:
+    """cross_task_transfer() — strategy migration between tasks.
+
+    Uses temp EXPFLOW_HOME to avoid cross-test contamination.
+    """
+
+    @staticmethod
+    def _with_meta(tmpdir, task_id, strategies):
+        """Write task meta to a temp dir and set EXPFLOW_HOME."""
+        import os
+        import yaml
+
+        tdir = str(tmpdir)
+        meta_path = os.path.join(tdir, "task_meta.yaml")
+        meta = {
+            task_id: {
+                "proven_strategies": strategies,
+            },
+            "task2": {"proven_strategies": []},
+            "task3": {"proven_strategies": []},
+        }
+        os.makedirs(tdir, exist_ok=True)
+        with open(meta_path, "w") as f:
+            yaml.safe_dump(meta, f)
+        os.environ["EXPFLOW_HOME"] = tdir
+
+    def test_no_transferable_returns_empty(self, tmp_path):
+        from expflow_pde.analyze import cross_task_transfer
+
+        self._with_meta(tmp_path, "task1", [
+            {"text": "P2 arch", "applicable_tasks": ["task1"]},
+        ])
+        result = cross_task_transfer("task1", "task2")
+        assert result["count"] == 0
+
+    def test_transferable_strategies_work(self, tmp_path):
+        from expflow_pde.analyze import cross_task_transfer
+
+        self._with_meta(tmp_path, "task1", [
+            {"text": "sub_step=5: +11.37 Seg", "applicable_tasks": ["task1", "task3"]},
+        ])
+        result = cross_task_transfer("task1", "task3")
+        assert result["count"] == 1
+        assert result["transferred"][0]["text"].startswith("sub_step=5")
+
+    def test_get_transferable_no_applicable_returns_empty(self, tmp_path):
+        from expflow_pde.analyze import _get_transferable_strategies
+
+        self._with_meta(tmp_path, "task1", [
+            {"text": "Some strategy"},  # no applicable_tasks
+        ])
+        result = _get_transferable_strategies("task1", "task2")
+        assert result == []
+
+    def test_get_transferable_no_strategies_returns_empty(self, tmp_path):
+        from expflow_pde.analyze import _get_transferable_strategies
+
+        self._with_meta(tmp_path, "task1", [])  # empty strategies
+        result = _get_transferable_strategies("task1", "task2")
+        assert result == []

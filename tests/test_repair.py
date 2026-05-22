@@ -430,3 +430,70 @@ class TestFetchTaskLogTriple:
         sig = inspect.signature(_fetch_task_log)
         hint = sig.return_annotation
         assert hint is not inspect.Parameter.empty
+
+
+class TestRepeatDiagnoseCLI:
+    """expflow repeat diagnose — CLI diagnosis path."""
+
+    def test_diagnose_from_json_file(self, tmp_path):
+        """Reading from a local JSON file produces valid output."""
+        import json
+        import sys
+
+        data = {
+            "task_log": "Traceback (most recent call last):\n  File \"train.py\", line 42, in <module>\n    import torch\nModuleNotFoundError: No module named 'torch'",
+            "exit_code": 1,
+            "pipeline_id": "pipe_diag_001",
+        }
+        fpath = tmp_path / "failed_result.json"
+        with open(fpath, "w") as f:
+            json.dump(data, f)
+
+        from expflow_pde.cli_repeat import repeat_diagnose_cmd
+
+        # Capture output — command prints to stdout
+        from io import StringIO
+
+        captured = StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            repeat_diagnose_cmd(target=str(fpath), json_output=False)
+        finally:
+            sys.stdout = old_stdout
+
+        output = captured.getvalue()
+        assert "Diagnosis" in output
+        assert "level=" in output or "L0" in output
+
+    def test_diagnose_json_output(self, tmp_path):
+        """--json flag produces valid JSON output."""
+        import json
+        import sys
+
+        data = {
+            "task_log": "Error: something broke",
+            "exit_code": 1,
+            "pipeline_id": "pipe_diag_002",
+        }
+        fpath = tmp_path / "failed_result.json"
+        with open(fpath, "w") as f:
+            json.dump(data, f)
+
+        from expflow_pde.cli_repeat import repeat_diagnose_cmd
+
+        from io import StringIO
+
+        captured = StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            repeat_diagnose_cmd(target=str(fpath), json_output=True)
+        finally:
+            sys.stdout = old_stdout
+
+        output = captured.getvalue()
+        parsed = json.loads(output.strip())
+        assert isinstance(parsed, dict)
+        assert "level" in parsed
+        assert "action" in parsed

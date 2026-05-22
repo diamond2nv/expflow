@@ -1017,3 +1017,99 @@ def sync_task_meta_from_clearml(
             )
 
     return {"updated": updated, "message": f"Synced {len(updated)} tasks"}
+
+
+def _get_transferable_strategies(
+    source_task: str,
+    target_task: str,
+) -> list[dict[str, Any]]:
+    """Return strategies from source_task that are applicable to target_task.
+
+    Filters based on:
+    1. applicable_tasks list in strategy dict — if set, target must be in it
+    2. If applicable_tasks is absent or empty, the strategy is assumed
+       source-specific and NOT transferable (conservative default).
+
+    The function calling this is expected to combine the returned strategies
+    with the target task's own proven_strategies before writing to task_meta.
+
+    Examples:
+        Strategy: "P2 architecture (16/32, 50K params)"
+          applicable_tasks: [task1]  →  only applies to task1
+          return: [] when target=task2
+
+        Strategy: "sub_step=5: +11.37 Seg (dt mismatch fix)"
+          applicable_tasks: [task1, task3]  →  applies to both Burgers tasks
+          return: [strategy] when target=task3
+    """
+    meta = get_task_meta(source_task)
+    strategies = meta.get("proven_strategies", [])
+    if not strategies:
+        return []
+
+    transferable: list[dict[str, Any]] = []
+    for s in strategies:
+        applicable = s.get("applicable_tasks", [])
+        if not applicable:
+            continue  # no applicable_tasks → source-specific, not transferable
+        if target_task in applicable:
+            transferable.append(dict(s))
+    return transferable
+
+
+def cross_task_transfer(
+    source_task: str,
+    target_task: str,
+) -> dict[str, Any]:
+    """Transfer applicable strategies from source to target task.
+
+    Args:
+        source_task: Task whose proven_strategies to inspect.
+        target_task: Task to receive transferable strategies.
+
+    Returns:
+        Dict with transferred strategies and a summary.
+    """
+    strategies = _get_transferable_strategies(source_task, target_task)
+
+    if not strategies:
+        return {
+            "transferred": [],
+            "count": 0,
+            "message": f"No transferable strategies from {source_task} to {target_task}",
+        }
+
+    # Merge into target task's meta
+    existing = get_task_meta(target_task)
+    existing_raw = existing.get("proven_strategies", [])
+    if not isinstance(existing_raw, list):
+        existing_raw = []
+    existing_strategies: list[dict[str, Any]] = [
+        s for s in existing_raw if isinstance(s, dict)
+    ]
+
+    # Avoid duplicates
+    existing_texts = {s.get("text", "") for s in existing_strategies if isinstance(s, dict)}
+    new_strategies = [s for s in strategies if s.get("text", "") not in existing_texts]
+
+    if new_strategies:
+        meta_path = _get_task_meta_path()
+        full_meta = _load_task_meta()
+        if target_task not in full_meta:
+            full_meta[target_task] = {}
+        target_meta = full_meta[target_task]
+        target_meta["proven_strategies"] = existing_strategies + new_strategies
+        # Also mark the source of the transferred knowledge
+        target_meta["transferred_from"] = target_meta.get("transferred_from", [])
+        if source_task not in target_meta["transferred_from"]:
+            target_meta["transferred_from"].append(source_task)
+        import yaml
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        with open(meta_path, "w") as f:
+            yaml.safe_dump(full_meta, f, default_flow_style=False, allow_unicode=True)
+
+    return {
+        "transferred": new_strategies,
+        "count": len(new_strategies),
+        "message": f"Transferred {len(new_strategies)} strategies from {source_task} to {target_task}",
+    }
