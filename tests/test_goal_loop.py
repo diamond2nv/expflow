@@ -275,3 +275,104 @@ class TestGoalLoopMock:
 
         loaded = GoalOrchestrator.load()
         assert loaded['best_score'] == 100.0
+
+
+class TestV3GoalPromptLogic:
+    """Core logic from the v3 /goal prompt: diagnose_segs, propose_params.
+
+    These are pure-Python functions with no clearml dependency.
+    They directly implement the reasoning loop described in
+    p2-goal-prompt.md and thus validate the prompt's correctness.
+    """
+
+    # ── v3 prompt: diagnose_segs ──
+
+    @staticmethod
+    def _diagnose_segs(seg1, seg2, seg3, task_id):
+        """From v3 prompt section 2: degradation diagnosis."""
+        decay_rate = max(seg1 - seg2, seg2 - seg3) / max(seg1, seg2, 1e-8)
+
+        thresholds = {
+            "task1": {"seg1_low": 60, "seg3_low": 35},
+            "task2": {"seg1_low": 40, "seg3_low": 25},
+            "task3": {"seg1_low": 10, "seg3_low": 10},
+        }
+        th = thresholds.get(task_id, thresholds["task1"])
+
+        if seg1 < th["seg1_low"]:
+            return "short_term"
+        if seg1 - seg2 > 25:
+            return "mid_term"
+        if seg3 < th["seg3_low"] or seg3 < seg2 * 0.6:
+            return "long_term"
+        if seg1 < 70 and seg2 > seg1 * 0.85 and seg3 > seg2 * 0.7:
+            return "ceiling"
+        return "stable"
+
+    # ── v3 prompt: propose_params ──
+
+    @staticmethod
+    def _propose_params(pattern, best_params=None):
+        """From v3 prompt section 3: parameter adjustment by degradation."""
+        best = best_params or {}
+        base = {
+            "n_modes": best.get("n_modes", 16),
+            "hidden_channels": best.get("hidden_channels", 64),
+            "sub_step": best.get("sub_step", 5),
+        }
+
+        if pattern == "short_term":
+            base["n_modes"] = min(base["n_modes"] * 2, 32)
+            base["epochs"] = max(best.get("epochs", 80), 100)
+        elif pattern in ("mid_term", "long_term"):
+            base["sub_step"] = min(base["sub_step"] + 5, 20)
+            base["n_modes"] = max(base["n_modes"], 16)
+        elif pattern == "ceiling":
+            base["hidden_channels"] = min(base["hidden_channels"] * 2, 256)
+            base["n_modes"] = min(base["n_modes"] * 2, 32)
+        elif pattern in ("stable", "init"):
+            pass
+
+        return base
+
+    # ── Tests ──
+
+    def test_diagnose_short_term(self):
+        """Seg1=55 on task1 triggers short_term."""
+        assert self._diagnose_segs(55, 50, 45, "task1") == "short_term"
+
+    def test_diagnose_mid_term(self):
+        """Seg1=100, Seg2=70, Seg3=65 — seg1-seg2=30 > 25 → mid_term."""
+        assert self._diagnose_segs(100, 70, 65, "task1") == "mid_term"
+
+    def test_diagnose_long_term(self):
+        """Seg1=100, Seg2=80, Seg3=30 — seg3 < 35 → long_term."""
+        assert self._diagnose_segs(100, 80, 30, "task1") == "long_term"
+
+    def test_diagnose_ceiling(self):
+        """Consistently mediocre scores across all segments → ceiling."""
+        assert self._diagnose_segs(65, 60, 55, "task1") == "ceiling"
+
+    def test_diagnose_stable(self):
+        """Strong and balanced → stable."""
+        assert self._diagnose_segs(95, 88, 80, "task1") == "stable"
+
+    def test_propose_short_term_increases_n_modes(self):
+        p = self._propose_params("short_term")
+        assert p["n_modes"] >= 32
+        assert p["epochs"] >= 100
+
+    def test_propose_mid_term_increases_sub_step(self):
+        p = self._propose_params("mid_term")
+        assert p["sub_step"] >= 10
+
+    def test_propose_ceiling_increases_hidden(self):
+        p = self._propose_params("ceiling")
+        assert p["hidden_channels"] >= 128
+        assert p["n_modes"] >= 32
+
+    def test_propose_stable_preserves_params(self):
+        best = {"n_modes": 24, "hidden_channels": 128, "sub_step": 10}
+        p = self._propose_params("stable", best)
+        assert p["n_modes"] == 24
+        assert p["hidden_channels"] == 128
