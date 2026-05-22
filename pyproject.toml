@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "expflow-pde"
-version = "0.7.0"
+version = "0.7.1"
 description = "Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci — clearml + optuna + langfuse integration, dataset compliance, distributed experiment dispatch."
 authors = [
     {name = "Li Shen"},

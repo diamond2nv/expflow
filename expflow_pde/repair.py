@@ -205,6 +205,17 @@ class RepairStage:
                 # Check for OOM-killer signature in log
                 if "killed" in task_log.lower() or exit_code == 137:
                     action += " — likely OOM (out of memory)"
+                    # Persist OOM signal for suggest_next_params
+                    try:
+                        from expflow_pde.analyze import _record_oom_event
+
+                        _record_oom_event(
+                            task_id=self._exp_id,
+                            exit_code=exit_code,
+                            details=action,
+                        )
+                    except Exception:
+                        pass
                 return {
                     "level": "L1",
                     "fixed": False,

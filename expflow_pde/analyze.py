@@ -14,7 +14,9 @@ Usage:
     )
 """
 
+import json
 import os
+from datetime import datetime
 from typing import Any
 
 from expflow_pde.equations import (
@@ -81,6 +83,82 @@ _FALLBACK_SEG1_LOW: dict[str, float] = {
 
 _TASK_META_YAML: str | None = None
 
+# ── OOM history — persistent signal across /goal iterations ──
+
+_OOM_HISTORY_KEYS = ["n_modes", "width", "batch_size", "n_layers"]
+
+
+def _get_repair_history_path() -> str:
+    home = os.environ.get("EXPFLOW_HOME", os.path.expanduser("~/.expflow"))
+    return os.path.join(home, "repair_history.jsonl")
+
+
+def _record_oom_event(task_id: str, exit_code: int, details: str = "") -> None:
+    """Persist an OOM/signal event to repair_history.jsonl."""
+    path = _get_repair_history_path()
+    record = {
+        "timestamp": datetime.now().isoformat(),
+        "task_id": task_id,
+        "exit_code": exit_code,
+        "type": "oom" if exit_code == 137 else "signal",
+        "details": details,
+    }
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _load_oom_history() -> list[dict[str, Any]]:
+    """Load recent OOM/repair events from JSONL (last 10 entries)."""
+    path = _get_repair_history_path()
+    if not os.path.exists(path):
+        return []
+    records: list[dict[str, Any]] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+    except (json.JSONDecodeError, OSError, IOError):
+        return []
+    return records[-10:]
+
+
+def _has_recent_oom(oom_history: list[dict[str, Any]], window: int = 3) -> bool:
+    """Check if the last N entries include an OOM event."""
+    recent = oom_history[-window:]
+    return any(r.get("type") == "oom" or r.get("exit_code") == 137 for r in recent)
+
+
+def _suppress_oom_params(
+    suggestions: dict[str, Any],
+    rationale: list[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Suppress capacity-increasing params when recent OOM detected."""
+    oom_history = _load_oom_history()
+    if not _has_recent_oom(oom_history):
+        return suggestions, rationale
+
+    suppressed_any = False
+    for key in _OOM_HISTORY_KEYS:
+        if key in suggestions:
+            old_val = suggestions.pop(key)
+            rationale.append(
+                f"[OOM SUPPRESS] Reverted {key}={old_val}: "
+                f"recent OOM detected ({oom_history[-1].get('task_id', '?')}). "
+                "Try reducing capacity or batch size first."
+            )
+            suppressed_any = True
+
+    if suppressed_any and "tag" in suggestions:
+        suggestions["tag"] = str(suggestions["tag"]) + "_oom_escape"
+
+    return suggestions, rationale
+
 
 def _get_task_meta_path() -> str:
     if _TASK_META_YAML is not None:
@@ -97,12 +175,26 @@ def _load_task_meta() -> dict[str, dict[str, Any]]:
         import yaml
 
         with open(path) as f:
-            data = yaml.safe_load(f)
+            _try_flock(f, 1)  # LOCK_SH
+            try:
+                data = yaml.safe_load(f)
+            finally:
+                _try_flock(f, 8)  # LOCK_UN
         if not isinstance(data, dict):
             return {}
         return data
     except Exception:
         return {}
+
+
+def _try_flock(f, lock_type: int) -> None:
+    """Try fcntl.flock, silently skip on non-Linux or unsupported fs."""
+    try:
+        import fcntl  # noqa: PLC0415
+
+        fcntl.flock(f.fileno(), lock_type)
+    except Exception:
+        pass
 
 
 def update_task_meta(task_id: str, updates: dict[str, Any]) -> dict[str, Any]:
@@ -116,7 +208,13 @@ def update_task_meta(task_id: str, updates: dict[str, Any]) -> dict[str, Any]:
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            yaml.safe_dump(meta, f, default_flow_style=False, allow_unicode=True)
+            _try_flock(f, 2)  # LOCK_EX
+            try:
+                yaml.safe_dump(meta, f, default_flow_style=False, allow_unicode=True)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                _try_flock(f, 8)  # LOCK_UN
     except Exception as e:
         raise RuntimeError(f"Failed to persist task metadata: {e}") from e
     return dict(meta[task_id])
@@ -749,10 +847,6 @@ def diagnose_experiment(
     if not isinstance(total_mse, (int, float)):
         total_mse = 0.0
 
-    # ── Diagnosis rules (v2: composite + ceiling-aware, task-aware) ──
-    diagnosis: list[str] = []
-    degradation_pattern = "stable"
-
     # Normalize types
     s1 = float(seg1) if isinstance(seg1, (int, float)) else 0.0
     s2 = float(seg2) if isinstance(seg2, (int, float)) else 0.0
@@ -773,7 +867,11 @@ def diagnose_experiment(
     dist_max_seg = th["dist_shift_max_seg"]
     dist_mse_high = th["dist_shift_mse_high"]
 
-    # Detect ceiling: Seg1 below threshold but Seg2 close and Seg3 not collapsing
+    # ── Diagnosis rules (v3: short_term/mid_term/long_term take priority over ceiling) ──
+    diagnosis: list[str] = []
+    degradation_pattern = "stable"
+
+    # Step 1: Detect all patterns independently (no mutual exclusion)
     is_ceiling = (
         s1 < ceiling_seg1_high
         and s2 > 0
@@ -781,42 +879,58 @@ def diagnose_experiment(
         and (s1 - s2) < ceiling_gap
         and s3 > s2 * ceiling_seg3_ratio
     )
-    is_short_term = s1 < short_seg1_low and not is_ceiling
-
-    if is_ceiling:
-        diagnosis.append(
-            "Score ceiling — Seg uniformly low but stable (model capacity or data limit)"
-        )
-        degradation_pattern = "ceiling"
-
-    elif is_short_term:
-        diagnosis.append("Short-term prediction is weak (Seg1 low)")
-        degradation_pattern = "short_term"
-
-    # Medium-term — detect independently (not mutually exclusive)
+    # Short-term only when NOT close to ceiling: Seg1 far enough from threshold
+    # or Seg1-Seg2 gap is large enough to rule out ceiling
+    is_short_term = s1 < short_seg1_low and not (is_ceiling and (ceiling_seg1_high - s1) < 5.0)
     mid_term_detected = s1 > 0 and s2 > 0 and (s1 - s2) > mid_gap
-    if mid_term_detected:
-        diagnosis.append("Medium-term stability degraded (Seg2 drops >%d from Seg1)" % int(mid_gap))
-
-    # Long-term — detect independently
     long_term_detected = s3 < long_seg3_low or (s2 > 0 and s3 < s2 * long_seg3_seg2_ratio)
-    if long_term_detected:
-        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
 
-    # Resolve composite pattern
-    if is_ceiling:
-        # Ceiling takes priority — mid/long_term are artifacts of plateau
-        pass
-    elif is_short_term:
-        # Short-term takes priority — mid/long_term are secondary effects
-        pass
-    elif mid_term_detected and long_term_detected:
+    # Step 2: Determine primary degradation pattern (most actionable first)
+    # Priority: short_term > compound_mid_long > long_term > mid_term > ceiling > stable
+    if is_short_term:
+        diagnosis.append("Short-term prediction is weak (Seg1 low) — likely underfitting")
+        degradation_pattern = "short_term"
+        if is_ceiling:
+            diagnosis.append("Also: raw scores are in ceiling range (less likely given Seg1 low)")
+    elif long_term_detected and mid_term_detected:
+        diagnosis.append("Medium-term stability degraded (Seg2 drops from Seg1)")
+        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
         degradation_pattern = "compound_mid_long"
     elif long_term_detected:
         degradation_pattern = "long_term"
     elif mid_term_detected:
-        if degradation_pattern == "stable":
-            degradation_pattern = "mid_term"
+        degradation_pattern = "mid_term"
+    elif is_ceiling:
+        diagnosis.append(
+            "Score ceiling — Seg uniformly low but stable (model capacity or data limit)"
+        )
+        degradation_pattern = "ceiling"
+    else:
+        diagnosis.append("No critical degradation detected")
+
+    # Step 3: Add secondary diagnosis entries for non-primary patterns
+    if degradation_pattern not in ("short_term", "ceiling"):
+        if is_ceiling:
+            diagnosis.append(
+                "Secondary: score ceiling detected — after resolving primary issue, "
+                "consider increasing model capacity"
+            )
+        if is_short_term:
+            diagnosis.append(
+                "Secondary: short-term prediction weak (may worsen after primary fixes)"
+            )
+    if mid_term_detected and degradation_pattern not in (
+        "mid_term",
+        "compound_mid_long",
+        "short_term",
+    ):
+        diagnosis.append("Medium-term stability degraded (Seg2 drops from Seg1)")
+    if long_term_detected and degradation_pattern not in (
+        "long_term",
+        "compound_mid_long",
+        "short_term",
+    ):
+        diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
 
     # Distribution shift (independent check)
     if s1 > 0 and s2 > 0 and s3 > 0 and max(s1, s2, s3) < dist_max_seg and mse < dist_mse_high:
@@ -929,6 +1043,9 @@ def suggest_next_params(
         suggestions["tag"] = "auto_hpo_round"
         rationale.append("Experiment stable. Run targeted HPO on remaining strategies.")
 
+    # OOM suppression: prevent capacity increase after recent OOM events
+    suggestions, rationale = _suppress_oom_params(suggestions, rationale)
+
     return {
         "suggested_params": suggestions,
         "rationale": rationale,
@@ -946,6 +1063,10 @@ def sync_task_meta_from_clearml(
 ) -> dict[str, Any]:
     """Fetch latest completed task metrics from clearml, update task_meta.yaml.
 
+    Uses clearml's get_last_scalars() API to read actual scoring scalars
+    (seg_total, total_segmented_score, etc.) rather than the
+    last_iteration (training step count) which is NOT a competition score.
+
     Groups completed tasks by tag matching (task1/task2/task3), finds the
     max seg_total per group, and updates the YAML current_best values.
 
@@ -954,9 +1075,9 @@ def sync_task_meta_from_clearml(
         tags: Optional filter tags (e.g. ['task1']).
 
     Returns:
-        Dict with updated tasks and their new best scores.
+        Dict with updated tasks and their new best scores, plus any warnings.
     """
-    from expflow_pde.clearml import list_tasks
+    from expflow_pde.clearml import get_task_scalars, list_tasks
 
     tasks = list_tasks(
         project_name=project_name,
@@ -979,28 +1100,77 @@ def sync_task_meta_from_clearml(
             if task_id in t_tags:
                 task_groups[task_id].append(t)
 
+    # Priority-ordered scoring scalar key prefixes
+    _score_keys = [
+        "seg_total",
+        "total_segmented_score",
+        "total",
+        "Total",
+    ]
+
+    def _extract_score(scalars: dict[str, Any] | None) -> float | None:
+        """Extract the best-matching score from scalars dict.
+
+        scalars format from get_task_scalars: {"Score/seg_total": 116.5, ...}
+        Searches by priority-ordered list of key substrings.
+        """
+        if not scalars:
+            return None
+        for prefix in _score_keys:
+            for key, val in sorted(scalars.items()):
+                if prefix.lower() in key.lower() and isinstance(val, (int, float)):
+                    return float(val)
+        return None
+
     updated: list[dict[str, Any]] = []
+    warnings_list: list[str] = []
+
     for task_id, group in task_groups.items():
         if not group:
             continue
 
         meta = get_task_meta(task_id)
-
         current_best = meta.get("current_best_total") or 0
 
-        best_task = max(
-            group,
-            key=lambda x: x.get("last_iteration", 0),
-        )
-        new_total = best_task.get("last_iteration", 0) or 0
+        # Score each task by actual scalars, NOT last_iteration
+        scored_tasks: list[tuple[float | None, dict[str, Any]]] = []
+        for t in group:
+            tid = t.get("id", "")
+            try:
+                scalars = get_task_scalars(tid)
+                score = _extract_score(scalars)
+            except Exception:
+                score = None
+            scored_tasks.append((score, t))
+
+        # Find best by actual score (tasks with no score rank lowest)
+        def _best_key(item: tuple[float | None, dict[str, Any]]) -> tuple:
+            score = item[0]
+            if score is None:
+                return (0, 0)
+            return (1, score)
+
+        scored_tasks.sort(key=_best_key, reverse=True)
+        best_score, best_task = scored_tasks[0]
+
+        if best_score is None:
+            warnings_list.append(
+                f"{task_id}: No scoring scalar found for any task. "
+                f"Tried names: seg_total, total_segmented_score, total, Total. "
+                f"Falling back to last_iteration={best_task.get('last_iteration', 0)} "
+                f"(this is the epoch count, NOT a competition score)."
+            )
+            best_score = float(best_task.get("last_iteration", 0) or 0)
+
+        new_total = float(best_score)
 
         # Update if better
         if new_total > current_best:
             update_task_meta(
                 task_id,
                 {
-                    "current_best_seg": round(float(new_total), 2),
-                    "current_best_total": round(float(new_total), 2),
+                    "current_best_seg": round(new_total, 2),
+                    "current_best_total": round(new_total, 2),
                     "remaining_headroom": max(
                         0,
                         (meta.get("max_score") or 150) - new_total,
@@ -1013,10 +1183,18 @@ def sync_task_meta_from_clearml(
                     "previous_best": current_best,
                     "new_best": new_total,
                     "best_task_id": best_task.get("id"),
+                    "best_task_name": best_task.get("name"),
                 }
             )
 
-    return {"updated": updated, "message": f"Synced {len(updated)} tasks"}
+    message_parts = [f"Synced {len(updated)} tasks"]
+    if warnings_list:
+        message_parts.append(f"({len(warnings_list)} warnings)")
+    return {
+        "updated": updated,
+        "message": ". ".join(message_parts),
+        "warnings": warnings_list if warnings_list else None,
+    }
 
 
 def _get_transferable_strategies(
@@ -1084,9 +1262,7 @@ def cross_task_transfer(
     existing_raw = existing.get("proven_strategies", [])
     if not isinstance(existing_raw, list):
         existing_raw = []
-    existing_strategies: list[dict[str, Any]] = [
-        s for s in existing_raw if isinstance(s, dict)
-    ]
+    existing_strategies: list[dict[str, Any]] = [s for s in existing_raw if isinstance(s, dict)]
 
     # Avoid duplicates
     existing_texts = {s.get("text", "") for s in existing_strategies if isinstance(s, dict)}
@@ -1104,9 +1280,16 @@ def cross_task_transfer(
         if source_task not in target_meta["transferred_from"]:
             target_meta["transferred_from"].append(source_task)
         import yaml
+
         os.makedirs(os.path.dirname(meta_path), exist_ok=True)
         with open(meta_path, "w") as f:
-            yaml.safe_dump(full_meta, f, default_flow_style=False, allow_unicode=True)
+            _try_flock(f, 2)  # LOCK_EX
+            try:
+                yaml.safe_dump(full_meta, f, default_flow_style=False, allow_unicode=True)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                _try_flock(f, 8)  # LOCK_UN
 
     return {
         "transferred": new_strategies,
