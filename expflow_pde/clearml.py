@@ -190,8 +190,10 @@ def get_task_scalars(task_id: str) -> dict[str, Any] | None:
             for title, series_dict in reported.items():
                 for series, value in series_dict.items():
                     scalars[f"{title}/{series}"] = value
+    except ImportError:
+        raise
     except Exception:
-        pass
+        scalars["_scalar_fetch_warning"] = "Could not read get_last_scalars"
 
     # Also try reading from the task's artifacts / output
     try:
@@ -200,10 +202,17 @@ def get_task_scalars(task_id: str) -> dict[str, Any] | None:
         for title in ("Score", "Loss", "PDE", "Time"):
             for series_key, value in _get_series_values(task, title).items():
                 scalars[f"{title}/{series_key}"] = value
+    except ImportError:
+        raise
     except Exception:
-        pass
+        pass  # series-by-series errors are safe to ignore
 
     if not scalars:
+        return None
+
+    # If all we got was the warning key, that means no real scalars
+    real_scalars = {k: v for k, v in scalars.items() if not k.startswith("_")}
+    if not real_scalars:
         return None
     return scalars
 
