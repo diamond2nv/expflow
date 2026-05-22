@@ -965,6 +965,7 @@ def diagnose_experiment(
         "seg3": round(float(seg3), 2) if isinstance(seg3, (int, float)) else 0,
         "total": round(float(total), 2) if isinstance(total, (int, float)) else 0,
         "total_mse": (round(float(total_mse), 6) if isinstance(total_mse, (int, float)) else 0),
+        "pde_mean": (round(float(total_mse), 6) if isinstance(total_mse, (int, float)) else 0),
         "diagnosis": diagnosis,
         "degradation_pattern": degradation_pattern,
     }

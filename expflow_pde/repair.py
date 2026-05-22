@@ -92,6 +92,7 @@ class RepairStage:
         task_log: str,
         exit_code: int,
         enable_reflection: bool = False,
+        experiment_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run the full repair pipeline (L0 -> L1 -> L2)."""
         self._repair_history = []
@@ -121,7 +122,7 @@ class RepairStage:
 
         # L2: Reflection subagent (only if enabled)
         if enable_reflection:
-            l2_result = self._try_l2(task_log, exit_code, l1_result)
+            l2_result = self._try_l2(task_log, exit_code, l1_result, experiment_params=experiment_params)
             self._repair_history.append(l2_result)
             return self._build_result("L2", l2_result)
 
@@ -282,7 +283,8 @@ class RepairStage:
     # ── L2: Reflection subagent────
 
     def _try_l2(
-        self, task_log: str, exit_code: int, l1_result: dict[str, Any] | None = None
+        self, task_log: str, exit_code: int, l1_result: dict[str, Any] | None = None,
+        experiment_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Prepare structured L2 reflection context for Hermes subagent.
 
@@ -294,6 +296,9 @@ class RepairStage:
             exit_code: Process exit code.
             l1_result: Output of _try_l1() — may have already identified
                        signal exit codes or extracted traceback info.
+            experiment_params: Optional dict of hyperparams used in the
+                               failed experiment (e.g. {"n_modes": 24}).
+                               Injected into subagent prompt as natural language.
         """
         # Input validation — early exit if log has no useful signal
         if not _log_has_failure_signal(task_log):
@@ -369,6 +374,9 @@ class RepairStage:
             tb_lines[:20],
         )
 
+        # Phase C: Experiment parameters → natural language for subagent
+        experiment_params_nl = _describe_params(experiment_params) if experiment_params else ""
+
         # Render the subagent prompt with structured context
         context = {
             "experiment_id": self._exp_id,
@@ -378,9 +386,19 @@ class RepairStage:
             "files_to_check": files_to_check,
             "wiki_paths": wiki_paths,
             "semantic_context": semantic_context,
+            "experiment_params_nl": experiment_params_nl,
             "tb_snippet": tb_lines[:20],
         }
         prompt = self._render_l2_prompt(context)
+
+        # Build subagent schema with dynamic params
+        subagent_schema: dict[str, Any] = {
+            "goal": "Analyze experiment failure and produce a fix plan",
+            "role": "leaf",
+            "toolsets": ["terminal", "file", "skills"],
+        }
+        if experiment_params:
+            subagent_schema["suggested_params"] = experiment_params
 
         return {
             "level": "L2",
@@ -398,13 +416,7 @@ class RepairStage:
             "semantic_context": semantic_context or "",
             "tb_snippet": tb_lines[:20],
             "subagent_prompt": prompt,
-            "subagent_schema": {
-                "goal": "Analyze experiment failure and produce a fix plan",
-                "role": "leaf",
-                "toolsets": ["terminal", "file", "skills"],
-                # Dynamic context — all keys are English lower_snake_case
-                "suggested_params": {},
-            },
+            "subagent_schema": subagent_schema,
         }
 
     _EXC_TYPE_WIKI: list[dict[str, Any]] = [
@@ -646,11 +658,19 @@ class RepairStage:
             wiki_str,
         ]
 
-        # Inject semantic context if available — this is the Phase 3 enhancement
+        # Inject semantic context if available
         if sem:
             segments.append("")
             segments.append("## Semantic Context")
             segments.append(sem)
+            segments.append("")
+
+        # Inject experiment parameters if available (Phase C)
+        exp_params = context.get("experiment_params_nl", "")
+        if exp_params:
+            segments.append("")
+            segments.append("## Experiment Parameters")
+            segments.append(f"This experiment used: {exp_params}")
             segments.append("")
 
         segments.extend([
@@ -733,3 +753,21 @@ class RepairStage:
             indent=2,
             ensure_ascii=False,
         )
+
+
+# ── Module-level helpers ──
+
+
+def _describe_params(params: dict[str, Any] | None) -> str:
+    """Convert experiment hyperparams dict to a natural-language description.
+
+    Example:
+        {"n_modes": 24, "width": 32, "batch_size": 4, "lr": 0.001}
+        -> "n_modes=24, width=32, batch_size=4, lr=0.001"
+    """
+    if not params:
+        return ""
+    parts: list[str] = []
+    for key, val in params.items():
+        parts.append(f"{key}={val}")
+    return ", ".join(parts)

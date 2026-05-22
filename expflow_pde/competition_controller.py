@@ -5,30 +5,30 @@
 Used by Hermes within the /goal loop (NOT a daemon or separate process).
 Provides constraint checks and state management for unattended competition.
 
-Key additions in this version:
-  - check_pipeline_in_flight(): idempotent cron guard — detects if a
-    pipeline from a previous cron tick is still running and prevents
-    duplicate submission.
-  - check_pipeline_recovery(): tells Hermes what to do when resuming
-    from a cron tick (re-attach wait vs. skip vs. repair).
-  - Deadline, budget, per-task limits, queue depth checks.
+Pipeline state arbitration has been UNIFIED into
+goal_orchestrator.resolve_pipeline_state() — this module no longer has
+its own check_pipeline_in_flight() to avoid action ambiguity.
+
+All deadline parsing uses stdlib only (re + datetime) — no dateutil dependency.
 """
 
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import os
+import re as _re
 from typing import Any
 
 logger = logging.getLogger("expflow_pde.competition_controller")
-
 
 # ── Constants ──
 
 _DEFAULT_DEADLINE = "2026-06-30T23:59:59+08:00"
 _DEFAULT_PER_TASK_MAX_HOURS = 12.0
+
+# Pure-stdlib timezone offset regex: +08:00, -05:30, etc.
+_ZONE_OFFSET_RE = _re.compile(r"([+-])(\d{2}):(\d{2})$")
 
 
 # ── CompetitionController ──
@@ -39,6 +39,9 @@ class CompetitionController:
 
     All checks are 0-token (pure Python). State persists via
     GoalOrchestrator.save().
+
+    Pipeline status checks delegate to
+    goal_orchestrator.resolve_pipeline_state() — there is ONE action source.
 
     Args:
         session_id: Unique identifier for this goal session.
@@ -66,26 +69,19 @@ class CompetitionController:
     # ── Deadline checks ──
 
     def check_deadline(self) -> bool:
-        """Check if the competition deadline has passed.
-
-        Returns True if current time > deadline (emergency mode).
-        """
-        parsed = self._parse_deadline(self._deadline)
+        """Check if the competition deadline has passed."""
+        parsed = _parse_deadline(self._deadline)
         return datetime.datetime.now(parsed.tzinfo) > parsed
 
     def remaining_days(self) -> float:
         """Days remaining before deadline (float, may be negative)."""
-        parsed = self._parse_deadline(self._deadline)
+        parsed = _parse_deadline(self._deadline)
         now = datetime.datetime.now(parsed.tzinfo)
         delta = parsed - now
         return max(0.0, delta.total_seconds() / 86400.0)
 
     def check_per_task_limit(self, task_name: str) -> bool:
-        """Check if a task has exceeded its time budget.
-
-        In sprint mode, returns False if cumulative hours > limit.
-        In explore mode, returns True (no limit).
-        """
+        """Check if a task has exceeded its time budget."""
         if self._mode != "sprint":
             return True
         cumulative = self._task_time.get(task_name, 0.0)
@@ -101,153 +97,25 @@ class CompetitionController:
         """Record cumulative time spent on a task."""
         self._task_time[task_name] = self._task_time.get(task_name, 0.0) + hours
 
-    # ── Cron idempotent guard ──
-
-    def check_pipeline_in_flight(
-        self, last_pipeline_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Check if a previously submitted pipeline is still in flight.
-
-        This is the cron idempotent guard. Call this at the START of each
-        /goal tick (before any new submit). If the previous tick's pipeline
-        is still running, returns status='running' — Herman should NOT submit.
-
-        Returns:
-            dict with keys:
-            - status: 'running' | 'completed' | 'failed' | 'none'
-            - action: instruction for Hermes
-            - pipeline_id: str or None
-        """
-        if not last_pipeline_id:
-            return {"status": "none", "action": "No previous pipeline", "pipeline_id": None}
-
-        try:
-            from expflow_pde.clearml import get_task  # noqa: PLC0415
-
-            task = get_task(last_pipeline_id)
-            if task is None:
-                return {
-                    "status": "unknown",
-                    "action": f"Cannot find pipeline {last_pipeline_id} — "
-                    "may have been deleted or clearml is unreachable",
-                    "pipeline_id": last_pipeline_id,
-                }
-            task_status = task.get("status", "") or ""
-
-            if task_status in ("queued", "in_progress", "created"):
-                return {
-                    "status": "running",
-                    "action": f"Pipeline {last_pipeline_id} is still {task_status}. "
-                    "Do NOT submit a new one yet. Re-attach --wait instead.",
-                    "pipeline_id": last_pipeline_id,
-                }
-            if task_status == "completed":
-                return {
-                    "status": "completed",
-                    "action": f"Pipeline {last_pipeline_id} completed. "
-                    "Read scalars and continue.",
-                    "pipeline_id": last_pipeline_id,
-                }
-            if task_status in ("failed", "stopped"):
-                return {
-                    "status": "failed",
-                    "action": f"Pipeline {last_pipeline_id} {task_status}. "
-                    "Trigger repair.",
-                    "pipeline_id": last_pipeline_id,
-                }
-            return {
-                "status": "unknown",
-                "action": f"Pipeline {last_pipeline_id} has unexpected status: {task_status}",
-                "pipeline_id": last_pipeline_id,
-            }
-        except Exception as exc:
-            return {
-                "status": "error",
-                "action": f"Cannot check pipeline status: {exc}",
-                "pipeline_id": last_pipeline_id,
-            }
-
-    def check_pipeline_recovery(
-        self,
-        last_pipeline_id: str | None,
-        last_train_task_id: str | None,
-        last_eval_task_id: str | None,
-    ) -> dict[str, Any]:
-        """Determine what Hermes should do when resuming from a cron tick.
-
-        Three outcomes:
-        - action='re_wait': pipeline still running, re-attach --wait
-        - action='read_scalars': pipeline completed, read results directly
-        - action='repair': pipeline failed, trigger repair
-
-        Returns:
-            dict with keys: action, pipeline_status, train_status, eval_status
-        """
-        result: dict[str, Any] = {
-            "action": "submit_new",
-            "pipeline_status": None,
-            "train_status": None,
-            "eval_status": None,
-        }
-
-        # Check pipeline status first
-        in_flight = self.check_pipeline_in_flight(last_pipeline_id)
-        pipeline_status = in_flight.get("status", "none")
-        result["pipeline_status"] = pipeline_status
-
-        if pipeline_status == "running":
-            result["action"] = "re_wait"
-            result["train_status"] = "in_progress"
-        elif pipeline_status == "completed":
-            result["action"] = "read_scalars"
-            try:
-                from expflow_pde.clearml import get_task  # noqa: PLC0415
-
-                if last_eval_task_id:
-                    eval_task = get_task(last_eval_task_id)
-                    result["eval_status"] = eval_task.get("status", "") if eval_task else None
-                if last_train_task_id:
-                    train_task = get_task(last_train_task_id)
-                    result["train_status"] = train_task.get("status", "") if train_task else None
-            except Exception:
-                pass
-        elif pipeline_status in ("failed", "stopped"):
-            result["action"] = "repair"
-        else:
-            # no previous or unknown — start fresh
-            result["action"] = "submit_new"
-
-        return result
-
     # ── Queue depth ──
 
     def check_queue_depth(self, queue_name: str = "default") -> dict[str, Any]:
         """Check clearml queue depth.
-
         Returns dict with running, pending, total counts.
         Returns all zeros on clearml connection error (non-fatal).
         """
         try:
             from expflow_pde.clearml import get_queue_depth  # noqa: PLC0415
-
             return get_queue_depth(queue_name)
         except Exception:
             return {"running": 0, "pending": 0, "total": 0}
 
-    def should_wait_for_queue(
-        self, queue_name: str = "default", max_pending: int = 1
-    ) -> bool:
-        """Check if queue backlog would inflate train_time.
-
-        Returns True if backlog may cause false train_time inflation.
-        """
+    def should_wait_for_queue(self, queue_name: str = "default", max_pending: int = 1) -> bool:
+        """Check if queue backlog would inflate train_time."""
         depth = self.check_queue_depth(queue_name)
         pending = depth.get("pending", 0)
         if pending > max_pending:
-            logger.info(
-                "Queue %s has %d pending tasks — waiting",
-                queue_name, pending,
-            )
+            logger.info("Queue %s has %d pending tasks — waiting", queue_name, pending)
             return True
         return False
 
@@ -284,49 +152,45 @@ class CompetitionController:
     def save(self, extra: dict[str, Any] | None = None) -> None:
         """Persist state via GoalOrchestrator.save()."""
         from expflow_pde.goal_orchestrator import save as _g_save  # noqa: PLC0415
-
         state = self.to_dict()
         if extra:
             state.update(extra)
         _g_save(state)
 
-    # ── Static helpers ──
 
-    @staticmethod
-    def _parse_deadline(deadline_str: str) -> datetime.datetime:
-        """Parse ISO-8601 deadline string with timezone awareness."""
-        # Remove trailing Z and normalize
-        s = deadline_str.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        if s.endswith("+08:00"):
-            fmt = "%Y-%m-%dT%H:%M:%S%z"
-            import re  # noqa: PLC0415
+# ── Pure-stdlib deadline parser ──
 
-            m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([+-]\d{2}:\d{2})", s)
-            if m:
-                return datetime.datetime(
-                    int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                    int(m.group(4)), int(m.group(5)), int(m.group(6)),
-                    tzinfo=datetime.timezone(
-                        datetime.timedelta(
-                            hours=int(m.group(7)[:3]),
-                            minutes=int(m.group(7)[4:]) if len(m.group(7)) > 5 else 0,
-                        )
-                    ),
-                )
-        # Fallback to dateutil if available, else basic parsing
-        try:
-            from dateutil import parser  # noqa: PLC0415
 
-            return parser.parse(s)
-        except ImportError:
-            # Basic fallback: treat as UTC
-            try:
-                return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S").replace(
-                    tzinfo=datetime.timezone.utc
-                )
-            except ValueError:
-                return datetime.datetime.strptime(s, "%Y-%m-%d").replace(
-                    tzinfo=datetime.timezone.utc
-                )
+def _parse_deadline(deadline_str: str) -> datetime.datetime:
+    """Parse ISO-8601 deadline string with timezone awareness.
+
+    Pure stdlib — no dateutil dependency. Supports:
+    - 2026-06-30T23:59:59+08:00
+    - 2026-06-30T23:59:59Z
+    - 2026-06-30 (date only, treated as UTC midnight)
+    """
+    s = deadline_str.strip()
+
+    # Handle trailing Z (normalize to +00:00)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    # Try with timezone offset
+    m = _ZONE_OFFSET_RE.search(s)
+    if m:
+        body = s[:m.start()]
+        sign = 1 if m.group(1) == "+" else -1
+        oh = int(m.group(2))
+        om = int(m.group(3))
+        tz = datetime.timezone(datetime.timedelta(hours=sign * oh, minutes=sign * om))
+        # Strip fractional seconds if present
+        body = body.split(".")[0]
+        dt = datetime.datetime.strptime(body, "%Y-%m-%dT%H:%M:%S")
+        return dt.replace(tzinfo=tz)
+
+    # Date only (no time component)
+    if "T" not in s:
+        return datetime.datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+
+    # Full datetime without timezone — treat as UTC
+    return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)

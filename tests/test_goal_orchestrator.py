@@ -8,7 +8,7 @@ from expflow_pde.goal_orchestrator import (
     add_learned_failure,
     clear,
     load,
-    recover_pipeline,
+    resolve_pipeline_state,
     save,
     _set_state_path,
 )
@@ -88,18 +88,18 @@ class TestGoalOrchestrator:
         monkeypatch.setattr("expflow_pde.goal_orchestrator._PROGRESS_PATH", p)
         add_learned_failure({
             "type": "oom",
-            "params": {"n_modes": 24},
+            "params": {"n_modes": 24, "batch_size": 4},
             "reason": "original",
             "experiment_id": "exp123",
         })
         add_learned_failure({
             "type": "oom",
-            "params": {"n_modes": 24},
+            "params": {"n_modes": 24, "batch_size": 4},  # identical keys
             "reason": "updated",
             "experiment_id": "exp456",
         })
         state = load()
-        assert len(state["learned_failures"]) == 1  # dedup
+        assert len(state["learned_failures"]) == 1  # dedup by (type, param_keys)
         assert state["learned_failures"][0]["reason"] == "updated"
 
     def test_add_learned_failure_max_20(self, tmp_path, monkeypatch):
@@ -115,38 +115,58 @@ class TestGoalOrchestrator:
         state = load()
         assert len(state["learned_failures"]) <= 20
 
-    def test_recover_pipeline_no_task_ids(self):
-        """No last_train_task_id → recovered immediately."""
-        result = recover_pipeline("", "", "completed")
-        assert result["recovered_phase"] == "recovered"
-        assert "start fresh" in result["action"]
+    def test_resolve_pipeline_state_no_task_ids(self):
+        """No last_pipeline_id -> submit_new."""
+        state = load()
+        state["last_pipeline_id"] = ""
+        state["last_train_task_id"] = ""
+        result = resolve_pipeline_state(state)
+        assert result["action"] == "submit_new"
 
-    def test_recover_pipeline_clearml_unreachable(self, monkeypatch):
-        """When clearml cannot be contacted, stall."""
+    def test_resolve_pipeline_state_clearml_unreachable(self, monkeypatch):
+        """When clearml cannot be contacted, falls through to submit_new."""
         monkeypatch.setattr(
             "expflow_pde.goal_orchestrator._get_task_status",
             lambda tid: None,
         )
-        result = recover_pipeline("task_xyz", "task_eval", "waiting")
-        assert result["recovered_phase"] == "stalled"
+        state = {
+            "last_pipeline_id": "pipe_xyz",
+            "last_train_task_id": "task_xyz",
+            "last_eval_task_id": "task_eval",
+            "current_phase": "waiting",
+        }
+        result = resolve_pipeline_state(state)
+        # clearml unreachable, no status -> submit_new to avoid stall
+        assert result["action"] == "submit_new"
 
-    def test_verify_state_warns_bad_keys(self, caplog):
-        """Non-English keys should produce a warning."""
+    def test_verify_state_rejects_bad_keys(self):
+        """Non-English keys should raise ValueError."""
         from expflow_pde.goal_orchestrator import _verify_state
-        import logging
-        caplog.set_level(logging.WARNING)
-        _verify_state({"建议": {"n_modes": 24}})
-        assert "unexpected key" in caplog.text
+        import pytest
+        with pytest.raises(ValueError, match="unexpected state key"):
+            _verify_state({"建议": {"n_modes": 24}})
 
-    def test_verify_state_accepts_english_keys(self, caplog):
+    def test_verify_state_accepts_english_keys(self):
+        """English snake_case keys should pass without error."""
         from expflow_pde.goal_orchestrator import _verify_state
-        import logging
-        caplog.set_level(logging.WARNING)
         _verify_state({"best_score": 142, "current_phase": "completed"})
-        assert "unexpected key" not in caplog.text
+        # no exception = pass
+
+    def test_load_strips_unknown_keys(self, tmp_path, monkeypatch):
+        """Persisted unknown keys should be stripped by load()."""
+        import json
+        p = str(tmp_path / "progress.json")
+        monkeypatch.setattr("expflow_pde.goal_orchestrator._PROGRESS_PATH", p)
+        # Write a state with a non-compliant key
+        with open(p, "w") as f:
+            json.dump({"best_score": 132, "建议": {"n_modes": 24}, "current_phase": "completed"}, f)
+        loaded = load()
+        assert loaded["best_score"] == 132.0
+        assert "建议" not in loaded  # stripped
+        assert loaded["current_phase"] == "completed"
 
     def test_session_recovery_flows_through_goal_orchestrator(self, monkeypatch, tmp_path):
-        """End-to-end: save pipeline state → simulate crash → recover."""
+        """End-to-end: save pipeline state -> simulate crash -> recover."""
         p = str(tmp_path / "progress.json")
         monkeypatch.setattr("expflow_pde.goal_orchestrator._PROGRESS_PATH", p)
 
@@ -167,9 +187,6 @@ class TestGoalOrchestrator:
         )
         state = load()
         assert state["current_phase"] == "waiting"
-        result = recover_pipeline(
-            state["last_train_task_id"],
-            state["last_eval_task_id"],
-            state["current_phase"],
-        )
-        assert result["recovered_phase"] in ("recovered", "stalled")
+        result = resolve_pipeline_state(state)
+        # clearml unreachable -> submit_new (not stalled)
+        assert result["action"] in ("submit_new",)
