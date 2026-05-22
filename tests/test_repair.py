@@ -286,7 +286,7 @@ class TestRepairStageWikiMapping:
         )
         if result["level"] == "L2":
             assert "wiki_source" in result
-            assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "none")
+            assert result["wiki_source"] in ("exact", "prefix", "substring", "fallback", "semantic", "none")
 
 
 class TestResolveRepairOutput:
@@ -372,6 +372,100 @@ class TestRepairStageWordMatch:
 
         paths = RepairStage._CLASSIFY_EXC("OSError", "No space left on device")
         assert any("disk-space" in p for p in paths)
+
+
+class TestRepairStageSemanticClassify:
+    """Semantic sidecar classification in _exc_type_to_wiki (L2 path only)."""
+
+    def _make_stage(self):
+        from expflow_pde.repair import RepairStage
+        return RepairStage()
+
+    def test_semantic_classify_sidecar_ok(self, monkeypatch):
+        """When sidecar is reachable and returns a valid concept, use it."""
+        stage = self._make_stage()
+
+        class _MockClient:
+            def check_health(self):
+                return {"status": "ok"}
+
+            def classify(self, text, concepts):
+                # Return the timeout label with high score
+                for label in concepts:
+                    if "Timeout" in label:
+                        return {"scores": {label: 0.85}, "top_concept": label, "top_score": 0.85}
+                return {"scores": {}, "top_concept": "", "top_score": 0.0}
+
+        monkeypatch.setattr(
+            "expflow_pde.semantic_client.SemanticClient",
+            lambda base_url=None: _MockClient(),
+        )
+
+        result = stage._exc_type_to_wiki("RuntimeError: training timed out after 7200s")
+        assert result["source"] == "semantic"
+        assert any("timeouts" in p for p in result["paths"])
+
+    def test_semantic_classify_sidecar_unreachable(self, monkeypatch):
+        """When sidecar is unreachable, fall through to keyword fallback."""
+        stage = self._make_stage()
+
+        class _UnreachableClient:
+            def check_health(self):
+                return None
+
+            def classify(self, text, concepts):
+                raise OSError("Connection refused")
+
+        monkeypatch.setattr(
+            "expflow_pde.semantic_client.SemanticClient",
+            lambda base_url=None: _UnreachableClient(),
+        )
+
+        # This would normally match keyword fallback
+        result = stage._exc_type_to_wiki("RuntimeError: CUDA OOM")
+        assert result["source"] == "fallback"
+        assert any("gpu-memory" in p for p in result["paths"])
+
+    def test_semantic_classify_low_confidence(self, monkeypatch):
+        """Low-confidence concepts should not override keyword fallback."""
+        stage = self._make_stage()
+
+        class _LowConfClient:
+            def check_health(self):
+                return {"status": "ok"}
+
+            def classify(self, text, concepts):
+                return {"scores": {"Timeout": 0.15}, "top_concept": "Timeout", "top_score": 0.15}
+
+        monkeypatch.setattr(
+            "expflow_pde.semantic_client.SemanticClient",
+            lambda base_url=None: _LowConfClient(),
+        )
+
+        # Low confidence (<0.2) should not accept semantic result
+        result = stage._exc_type_to_wiki("RuntimeError: unknown glitch")
+        assert result["source"] != "semantic"
+
+    def test_semantic_classify_fallback_on_exception(self, monkeypatch):
+        """Any exception in sidecar should gracefully fall through."""
+        stage = self._make_stage()
+
+        class _BrokenClient:
+            def check_health(self):
+                raise RuntimeError("sidecar crashed")
+
+            def classify(self, text, concepts):
+                return None
+
+        monkeypatch.setattr(
+            "expflow_pde.semantic_client.SemanticClient",
+            lambda base_url=None: _BrokenClient(),
+        )
+
+        result = stage._exc_type_to_wiki("RuntimeError: unknown glitch")
+        # Should still hit keyword fallback, which returns [] for unknown
+        assert result["source"] == "none"
+        assert len(result["paths"]) == 0
 
 
 class TestRepairStageFixParams:

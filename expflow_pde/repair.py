@@ -23,6 +23,23 @@ from expflow_pde.repair_rules import match_first
 
 logger = logging.getLogger("expflow_pde.repair")
 
+# ── Wiki categories for semantic classification ──
+# Maps descriptive natural-language labels to wiki page paths.
+# Used by _try_semantic_classify() when the sidecar is reachable.
+_WIKI_LABEL_TO_PAGE: dict[str, str] = {
+    "GPU memory exhaustion — CUDA OOM, nvrtc errors, GPU out of memory": "gpu-memory.md",
+    "OOM killer — process killed by system due to memory usage": "oom-killer.md",
+    "Shared memory capacity — /dev/shm too small, bus errors": "shared-memory.md",
+    "Disk space — no space left on device, storage exhausted": "disk-space.md",
+    "Timeout — step timeout, pipeline timeout, training stall": "timeouts.md",
+    "Segmentation fault — memory corruption, kernel crash": "segfault.md",
+    "Abort signal — assertion failure, critical error": "abort.md",
+    "Python dependency — ModuleNotFoundError, ImportError, pip conflict": "pip-dependencies.md",
+    "Dataset path — FileNotFoundError, data not found": "data-paths.md",
+    "DataLoader — worker crash, multiprocessing issue": "data-loader.md",
+    "CUDA runtime — cuFFT error, CUDA driver issue, GPU communication": "gpu-memory.md",
+}
+
 # ── Constants ──
 
 MAX_L1_ATTEMPTS = 2  # Max L1 quick-fix attempts before escalating to L2
@@ -438,7 +455,9 @@ class RepairStage:
 
         Returns dict with keys:
             paths: list[str] — wiki file paths
-            source: str — "exact" | "prefix" | "substring" | "fallback" | "none"
+            source: str — "exact" | "prefix" | "substring" | "semantic" | "fallback" | "none"
+
+        Priority order: exact match > prefix > substring > semantic (L2 only) > keyword fallback
         """
         if not exc_type or exc_type == "Unknown":
             return {"paths": [], "source": "none"}
@@ -451,11 +470,60 @@ class RepairStage:
             if entry["match"] == "substring" and entry["key"] in exc_type:
                 return {"paths": list(entry["paths"]), "source": "substring"}
 
+        # Semantic classification (sidecar) — only attempt when no exact/prefix/substring match
+        semantic_paths = self._try_semantic_classify(exc_type, exc_message)
+        if semantic_paths:
+            return {"paths": semantic_paths, "source": "semantic"}
         # Fallback — content-based classification for no explicit key matched
         paths = self._CLASSIFY_EXC(exc_type, exc_message)
         if paths:
             return {"paths": paths, "source": "fallback"}
         return {"paths": [], "source": "none"}
+
+    def _try_semantic_classify(self, exc_type: str, exc_message: str = "") -> list[str]:
+        """Use SemanticClient sidecar to classify an unknown exception type.
+
+        Falls back gracefully to empty list if the sidecar is unreachable
+        or the classify endpoint returns no meaningful match.
+
+        Args:
+            exc_type: Exception type string (e.g. 'RuntimeError').
+            exc_message: Exception message text.
+
+        Returns:
+            List of wiki page filenames (e.g. ['gpu-memory.md']), or empty list.
+        """
+        if not exc_type or exc_type == "Unknown":
+            return []
+        try:
+            from expflow_pde.semantic_client import SemanticClient  # noqa: PLC0415
+
+            client = SemanticClient()
+            if client.check_health() is None:
+                logger.debug("Semantic sidecar unreachable — skipping semantic classify")
+                return []
+            text = f"{exc_type}: {exc_message}" if exc_message else exc_type
+            result = client.classify(text, list(_WIKI_LABEL_TO_PAGE.keys()))
+            if result is None:
+                return []
+            top_label = result.get("top_concept", "")
+            top_score = result.get("top_score", 0.0)
+            # Only accept if confidence is reasonable (>0.2)
+            if top_label and top_score is not None and float(top_score) > 0.2:
+                page = _WIKI_LABEL_TO_PAGE.get(top_label)
+                if page:
+                    logger.debug(
+                        "Semantic classify: exc=%s → %s (score=%.3f)",
+                        exc_type, page, float(top_score),
+                    )
+                    return [f"~/wiki/troubleshooting/{page}"]
+            logger.debug(
+                "Semantic classify: exc=%s → low confidence score=%.3f, label=%s",
+                exc_type, float(top_score or 0), top_label,
+            )
+        except Exception as exc:
+            logger.debug("Semantic classify failed for %s: %s", exc_type, exc)
+        return []
 
     @staticmethod
     def _word_in(combined: str, word: str) -> bool:
