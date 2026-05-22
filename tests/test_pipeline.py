@@ -151,8 +151,8 @@ class TestExperimentPipeline:
 
         # Verify parameter override
         params = call_kwargs.get("parameter_override", {})
-        assert params.get("Args", {}).get("--epochs") == "80"
-        assert params.get("Args", {}).get("--lr") == "0.001"
+        assert params.get("Args", {}).get("epochs") == "80"
+        assert params.get("Args", {}).get("lr") == "0.001"
 
         # Verify start was called
         mock_clearml["start"].assert_called_once()
@@ -186,8 +186,8 @@ class TestExperimentPipeline:
         # Check parameter override
         eval_kwargs = eval_call["kwargs"]
         params = eval_kwargs.get("parameter_override", {})
-        assert params.get("Args", {}).get("--sub_step") == "5"
-        assert params.get("Args", {}).get("--val_only") == "True"
+        assert params.get("Args", {}).get("sub_step") == "5"
+        assert params.get("Args", {}).get("val_only") == "True"
 
     def test_custom_pipeline_name(self, mock_clearml):
         """Submit with custom pipeline name."""

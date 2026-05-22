@@ -12,6 +12,38 @@ from typing import Any, Literal
 # ── Internal helpers ──
 
 
+VALID_GIT_REPO_REGEX = r"^git@[\w.-]+:[\w/.\-]+\.git$"
+
+
+def validate_repo_url(repo_url: str) -> dict[str, bool | str]:
+    """Validate git repository URL format.
+
+    Catches common configuration errors like extra namespace prefixes
+    (e.g. ``git@gitlab-pdebench:zhejianglab/repo.git``) that would
+    only be caught by clearml agent at runtime.
+
+    Args:
+        repo_url: Git remote URL (e.g. from ``git remote -v``).
+
+    Returns:
+        dict with ``valid`` (bool), ``reason`` (str if invalid).
+    """
+    import re
+
+    if not repo_url or not isinstance(repo_url, str):
+        return {"valid": False, "reason": "Empty or non-string URL"}
+    if re.match(VALID_GIT_REPO_REGEX, repo_url):
+        return {"valid": True, "reason": ""}
+    return {
+        "valid": False,
+        "reason": (
+            f"Invalid git repo URL format: '{repo_url[:80]}'. "
+            f"Expected pattern: 'git@host:path/to/repo.git'. "
+            f"Copy the exact URL from 'git remote -v'."
+        ),
+    }
+
+
 def _get_task_module():
     """Lazy import of clearml to avoid import-time dependency."""
     import clearml  # noqa: F401 — triggers Task/Queue/Dataset availability
@@ -170,6 +202,44 @@ def get_task_scalars(task_id: str) -> dict[str, Any] | None:
     if not scalars:
         return None
     return scalars
+
+
+def resolve_checkpoint_path(
+    task_id: str,
+    checkpoint_dir_param: str = "checkpoint_dir",
+    tag_param: str = "tag",
+    model_prefix: str = "fno",
+) -> str:
+    """Resolve the checkpoint path for a training task dynamically.
+
+    Reads the actual parameters from a clearml training task and
+    constructs the checkpoint file path. This avoids hardcoded paths
+    that silently break when parameters change.
+
+    Args:
+        task_id: clearml task ID of the training run.
+        checkpoint_dir_param: Name of the checkpoint directory parameter
+            (default: ``checkpoint_dir``).
+        tag_param: Name of the tag parameter used in checkpoint filename
+            (default: ``tag``).
+        model_prefix: Prefix for model filename (default: ``fno``).
+
+    Returns:
+        Absolute path to the checkpoint file, or empty string if resolution
+        fails.
+    """
+    import os
+
+    task_cls = _get_task_module()  # noqa: N806
+    try:
+        task = task_cls.get_task(task_id=task_id)
+        params = task.get_parameters()
+        ckpt_dir = params.get(f"Args/{checkpoint_dir_param}", "checkpoints")
+        tag = params.get(f"Args/{tag_param}", "default")
+        model_name = f"{model_prefix}_{tag}.pt"
+        return os.path.join(ckpt_dir, model_name)
+    except Exception:
+        return ""
 
 
 def _get_series_values(task: Any, title: str) -> dict[str, float]:

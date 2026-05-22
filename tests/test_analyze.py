@@ -10,9 +10,11 @@ Covers:
 - list_all_equations_summary()
 - estimate_score_potential()
 """
-
 from expflow_pde.analyze import (
+    _format_deadline_str,
+    _get_competition_deadline,
     analyze_task,
+    diagnose_experiment,
     estimate_score_potential,
     get_equation_analysis,
     get_strategic_recommendation,
@@ -125,13 +127,28 @@ class TestStrategicRecommendation:
         r = get_strategic_recommendation()
         assert r["primary_focus"] in ("task1", "task2", "task3")
         assert r["remaining_days"] >= 0
-        assert r["competition_deadline"] == "2026-05-27 14:00 UTC+8"
-        assert len(r["suggested_schedule"]) >= 4
+        assert isinstance(r["competition_deadline"], str) and len(r["competition_deadline"]) > 0
+        assert len(r["suggested_schedule"]) >= 1
 
     def test_schedule_has_day_keys(self):
         r = get_strategic_recommendation()
         for key in r["suggested_schedule"]:
             assert "_" in key  # day_1_2 etc.
+
+    def test_env_override_deadline(self):
+        """EXPFLOW_COMPETITION_DEADLINE env var overrides default."""
+        import os
+
+        os.environ["EXPFLOW_COMPETITION_DEADLINE"] = "2026-07-15"
+        try:
+            d = _get_competition_deadline()
+            assert d.isoformat() == "2026-07-15"
+        finally:
+            del os.environ["EXPFLOW_COMPETITION_DEADLINE"]
+
+    def test_format_deadline_str(self):
+        s = _format_deadline_str()
+        assert isinstance(s, str) and len(s) > 0
 
 
 class TestEquationAnalysis:

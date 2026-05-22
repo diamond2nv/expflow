@@ -386,6 +386,51 @@ def estimate_score_potential(
     return {"optimistic": 0, "expected": 0, "conservative": 0, "confidence": "none"}
 
 
+def _get_competition_deadline():
+    """Read competition deadline from config or fall back to a sensible default.
+
+    Looks in ~/.expflow/config.yaml under ``competition.deadline``.
+    Falls back to ``EXPFLOW_COMPETITION_DEADLINE`` env var or 2026-06-30.
+    """
+    from datetime import date
+
+    deadline_str: str | None = None
+    try:
+        from expflow_pde.config import get
+
+        deadline_str = get("competition.deadline")
+    except Exception:
+        pass
+    if not deadline_str:
+        deadline_str = os.environ.get("EXPFLOW_COMPETITION_DEADLINE", "")
+    if not deadline_str:
+        return date(2026, 6, 30)
+
+    # Handle ISO-8601 with timezone
+    import re as _re
+
+    m = _re.match(r"(\d{4})-(\d{2})-(\d{2})", deadline_str)
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    return date(2026, 6, 30)
+
+
+def _format_deadline_str() -> str:
+    """Human-readable deadline string for the recommendation dict."""
+    try:
+        from expflow_pde.config import get
+
+        raw = get("competition.deadline", "")
+        if raw:
+            return raw
+    except Exception:
+        pass
+    raw = os.environ.get("EXPFLOW_COMPETITION_DEADLINE", "")
+    if raw:
+        return raw
+    return "2026-06-30 23:59:59 UTC+8"
+
+
 def get_strategic_recommendation() -> dict[str, Any]:
     """Get overall strategic recommendation across all tasks.
 
@@ -403,11 +448,13 @@ def get_strategic_recommendation() -> dict[str, Any]:
     t2 = get_task_meta("task2")
     t3 = get_task_meta("task3")
 
-    deadline = date(2026, 5, 27)
+    deadline = _get_competition_deadline()
     today = date.today()
     remaining_days = (deadline - today).days
     if remaining_days < 0:
         remaining_days = 0
+
+    deadline_str = _format_deadline_str()
 
     t1_total = t1.get("current_best_total") or 0
     t1_max = t1.get("max_score") or 150
@@ -438,7 +485,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
                     "day_2": "Task 1: Final submission with best config",
                 },
                 "remaining_days": remaining_days,
-                "competition_deadline": "2026-05-27 14:00 UTC+8",
+                "competition_deadline": deadline_str,
                 "submissions_per_day": 1,
                 "mode": "sprint",
             }
@@ -459,7 +506,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
                     "day_2": "Task 1: Best model submission",
                 },
                 "remaining_days": remaining_days,
-                "competition_deadline": "2026-05-27 14:00 UTC+8",
+                "competition_deadline": deadline_str,
                 "submissions_per_day": 1,
                 "mode": "sprint",
             }
@@ -488,7 +535,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
                 "day_5": "Task 1: Final submission",
             },
             "remaining_days": remaining_days,
-            "competition_deadline": "2026-05-27 14:00 UTC+8",
+            "competition_deadline": deadline_str,
             "submissions_per_day": 1,
             "mode": "mid_range",
         }
@@ -520,7 +567,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
             "day_7_8": "Task 3: Apply stability FT + optimize submission",
         },
         "remaining_days": remaining_days,
-        "competition_deadline": "2026-05-27 14:00 UTC+8",
+        "competition_deadline": deadline_str,
         "submissions_per_day": 1,
         "mode": "normal",
     }

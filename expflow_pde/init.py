@@ -30,6 +30,12 @@ def run_init() -> None:
     if not langfuse_host:
         langfuse_host = "http://localhost:3000"
 
+    # Competition deadline
+    deadline_default = "2026-06-30T23:59:59+08:00"
+    deadline_str = input(f"Competition deadline (ISO-8601, CST) [{deadline_default}]: ").strip()
+    if not deadline_str:
+        deadline_str = deadline_default
+
     config = {
         "clearml": {
             "api_host": clearml_api,
@@ -37,6 +43,10 @@ def run_init() -> None:
         },
         "langfuse": {
             "host": langfuse_host,
+        },
+        "competition": {
+            "deadline": deadline_str,
+            "deadline_tz": "+08:00",
         },
     }
 

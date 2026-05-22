@@ -70,7 +70,9 @@ class ExperimentPipeline:
         self.docker = docker
         self.abort_on_failure = abort_on_failure
         self.add_run_number = add_run_number
-        self.packages = packages
+        # For bare-metal conda environments: default to empty list (use conda env directly).
+        # None would cause clearml SDK to auto-detect all packages (pip install) which fails.
+        self.packages = packages if packages is not None else []
         self._last_result: dict[str, Any] | None = None
 
     # ── Mode B (fast): train → eval ──
@@ -146,8 +148,7 @@ class ExperimentPipeline:
             train_override: dict[str, Any] = {}
             if train_params:
                 train_override["Args"] = {
-                    f"--{k}" if not k.startswith("--") else k: str(v)
-                    for k, v in train_params.items()
+                    k: str(v) for k, v in train_params.items()
                 }
 
             add_train_result = pipeline_add_step(
@@ -167,8 +168,7 @@ class ExperimentPipeline:
             eval_override: dict[str, Any] = {}
             if eval_params:
                 eval_override["Args"] = {
-                    f"--{k}" if not k.startswith("--") else k: str(v)
-                    for k, v in eval_params.items()
+                    k: str(v) for k, v in eval_params.items()
                 }
 
             add_eval_result = pipeline_add_step(
@@ -349,8 +349,7 @@ class ExperimentPipeline:
             eval_override: dict[str, Any] = {}
             if eval_params:
                 eval_override["Args"] = {
-                    f"--{k}" if not k.startswith("--") else k: str(v)
-                    for k, v in eval_params.items()
+                    k: str(v) for k, v in eval_params.items()
                 }
 
             add_eval_result = pipeline_add_step(
