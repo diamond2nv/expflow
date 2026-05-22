@@ -89,7 +89,8 @@ class TestSchema:
     def test_tables_exist(self, db):
         with db._read_tx() as conn:
             tables = set(
-                r[0] for r in conn.execute(
+                r[0]
+                for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()
             )
@@ -102,17 +103,24 @@ class TestSchema:
     def test_indexes_exist(self, db):
         with db._read_tx() as conn:
             indexes = set(
-                r[0] for r in conn.execute(
+                r[0]
+                for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='index'"
                 ).fetchall()
             )
         expected = {
-            "idx_experiments_status", "idx_experiments_parent",
-            "idx_experiments_root", "idx_experiments_created",
-            "idx_experiments_ctask", "idx_branches_parent",
-            "idx_branches_child", "idx_artifacts_exp",
-            "idx_artifacts_type", "idx_metrics_exp",
-            "idx_metrics_name", "idx_audit_exp",
+            "idx_experiments_status",
+            "idx_experiments_parent",
+            "idx_experiments_root",
+            "idx_experiments_created",
+            "idx_experiments_ctask",
+            "idx_branches_parent",
+            "idx_branches_child",
+            "idx_artifacts_exp",
+            "idx_artifacts_type",
+            "idx_metrics_exp",
+            "idx_metrics_name",
+            "idx_audit_exp",
         }
         for idx in expected:
             assert idx in indexes, f"Missing index: {idx}"
@@ -157,7 +165,8 @@ class TestExperimentCRUD:
     def test_register_with_parent(self, db):
         parent = db.register_experiment(script="hpo.py")
         child = db.register_experiment(
-            script="train.py", parent_id=parent["experiment_id"],
+            script="train.py",
+            parent_id=parent["experiment_id"],
         )
         assert child["parent_id"] == parent["experiment_id"]
         assert child["root_id"] == parent["root_id"]
@@ -179,7 +188,8 @@ class TestExperimentCRUD:
         exp = db.register_experiment(script="train.py")
         db.update_status(exp["experiment_id"], "running")
         updated = db.update_status(
-            exp["experiment_id"], "completed",
+            exp["experiment_id"],
+            "completed",
             best_value=57.09,
             result_summary="HPO completed, best seg=57.09",
         )
@@ -190,7 +200,8 @@ class TestExperimentCRUD:
     def test_update_status_with_clearml_task_id(self, db):
         exp = db.register_experiment(script="train.py")
         updated = db.update_status(
-            exp["experiment_id"], "queued",
+            exp["experiment_id"],
+            "queued",
             clearml_task_id="cm_abc123",
         )
         assert updated["clearml_task_id"] == "cm_abc123"
@@ -240,7 +251,8 @@ class TestBranchTracking:
     def test_register_creates_branch_record(self, db):
         parent = db.register_experiment(script="hpo.py")
         child = db.register_experiment(
-            script="train.py", parent_id=parent["experiment_id"],
+            script="train.py",
+            parent_id=parent["experiment_id"],
         )
         children = db.get_children(parent["experiment_id"])
         assert len(children) == 1
@@ -264,7 +276,8 @@ class TestBranchTracking:
         root = db.register_experiment(script="root.py")
         child = db.register_experiment(script="child.py", parent_id=root["experiment_id"])
         grandchild = db.register_experiment(
-            script="grand.py", parent_id=child["experiment_id"],
+            script="grand.py",
+            parent_id=child["experiment_id"],
         )
         tree = db.query_by_root(root["experiment_id"])
         assert len(tree) == 3, f"Expected 3, got {len(tree)}: {[e['id'] for e in tree]}"
@@ -303,15 +316,13 @@ class TestMetrics:
     def test_record_multiple_metrics(self, db):
         exp = db.register_experiment(script="train.py")
         for epoch in range(5):
-            db.record_metric(exp["experiment_id"], "loss", 0.5 / (epoch + 1),
-                             iteration=epoch * 10)
+            db.record_metric(exp["experiment_id"], "loss", 0.5 / (epoch + 1), iteration=epoch * 10)
         metrics = db.get_metrics(exp["experiment_id"])
         assert len(metrics) == 5
 
     def test_record_metric_with_group(self, db):
         exp = db.register_experiment(script="train.py")
-        db.record_metric(exp["experiment_id"], "seg_total", 57.09,
-                         group_name="Score")
+        db.record_metric(exp["experiment_id"], "seg_total", 57.09, group_name="Score")
         metrics = db.get_metrics(exp["experiment_id"])
         assert metrics[0]["group_name"] == "Score"
 
@@ -340,8 +351,12 @@ class TestArtifacts:
     def test_add_and_get_artifact(self, db):
         exp = db.register_experiment(script="train.py")
         art = db.add_artifact(
-            exp["experiment_id"], "checkpoint", "best_model.pt",
-            "/checkpoints/best.pt", checksum="abc123", size_bytes=42 * 1024 * 1024,
+            exp["experiment_id"],
+            "checkpoint",
+            "best_model.pt",
+            "/checkpoints/best.pt",
+            checksum="abc123",
+            size_bytes=42 * 1024 * 1024,
         )
         assert art["artifact_id"].startswith("art:snow_")
 
@@ -371,15 +386,13 @@ class TestAuditLog:
     def test_status_change_creates_audit_entry(self, db):
         exp = db.register_experiment(script="train.py")
         db.update_status(exp["experiment_id"], "running")
-        log = db.get_audit_log(experiment_id=exp["experiment_id"],
-                               event_type="status_change")
+        log = db.get_audit_log(experiment_id=exp["experiment_id"], event_type="status_change")
         assert len(log) >= 1
 
     def test_audit_log_without_experiment(self, db):
         """event_type can be recorded without an experiment_id."""
         with db._write_tx() as conn:
-            db._write_audit(conn, None, "system_event",
-                            {"msg": "clearml server health check"})
+            db._write_audit(conn, None, "system_event", {"msg": "clearml server health check"})
         log = db.get_audit_log(event_type="system_event")
         assert len(log) == 1
         assert log[0]["experiment_id"] is None

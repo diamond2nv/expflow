@@ -250,39 +250,68 @@ class TestQueueOperations:
 
 
 class TestListQueues:
-    """list_queues() — retrieve available queues."""
+    """list_queues() / get_queue_status() — new backend API (clearml 2.1.7+)."""
 
     def test_list_queues_returns_serialized_dicts(self, mock_clearml_pkg):
-        mock_qs = [_make_mock_queue("q1", "default"), _make_mock_queue("q2", "gpu_queue")]
-        mock_clearml_pkg.Queue.get_queues.return_value = mock_qs
+        mock_data = {
+            "queues": [
+                {"id": "q1", "name": "default"},
+                {"id": "q2", "name": "gpu_queue"},
+            ]
+        }
+        with patch("expflow_pde.clearml._call_queue_service", return_value=mock_data):
+            from expflow_pde.clearml import list_queues
 
-        from expflow_pde.clearml import list_queues
-
-        result = list_queues()
+            result = list_queues()
 
         assert len(result) == 2
         assert result[0] == {"id": "q1", "name": "default"}
         assert result[1] == {"id": "q2", "name": "gpu_queue"}
 
     def test_get_queue_status_returns_dict(self, mock_clearml_pkg):
-        mock_q = _make_mock_queue("q1", "default")
-        mock_q.entries = []
-        mock_clearml_pkg.Queue.get_queue.return_value = mock_q
+        mock_data = {
+            "queues": [
+                {"id": "q1", "name": "default", "entries": []},
+                {"id": "q2", "name": "gpu_queue", "entries": []},
+            ]
+        }
+        with patch("expflow_pde.clearml._call_queue_service", return_value=mock_data):
+            from expflow_pde.clearml import get_queue_status
 
-        from expflow_pde.clearml import get_queue_status
-
-        result = get_queue_status("default")
+            result = get_queue_status("default")
 
         assert result["id"] == "q1"
         assert result["name"] == "default"
         assert "entries" in result
+        assert result["entries"] == []
 
-    def test_get_queue_status_passes_name(self, mock_clearml_pkg):
-        mock_clearml_pkg.Queue.get_queue.return_value = _make_mock_queue("q1", "default")
-        from expflow_pde.clearml import get_queue_status
+    def test_get_queue_status_not_found(self, mock_clearml_pkg):
+        with patch("expflow_pde.clearml._call_queue_service", return_value={"queues": []}):
+            from expflow_pde.clearml import get_queue_status
 
-        get_queue_status("gpu_queue")
-        mock_clearml_pkg.Queue.get_queue.assert_called_with(queue_name="gpu_queue")
+            result = get_queue_status("nonexistent")
+
+        assert "error" in result
+
+    def test_get_queue_status_with_task_entries(self, mock_clearml_pkg):
+        mock_data = {
+            "queues": [
+                {
+                    "id": "q1",
+                    "name": "default",
+                    "entries": [
+                        {"task": "task1", "id": "e1"},
+                        {"task": "task2", "id": "e2"},
+                    ],
+                },
+            ]
+        }
+        with patch("expflow_pde.clearml._call_queue_service", return_value=mock_data):
+            from expflow_pde.clearml import get_queue_status
+
+            result = get_queue_status("default")
+
+        assert result["entries"] == ["task1", "task2"]
 
 
 # ══════════════════════════════════════════════════════════════

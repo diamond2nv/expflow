@@ -70,8 +70,11 @@ class GitProjectNotFoundRule(RepairRule):
         if exit_code not in {128, 134, 137, 139, 143}:
             return False
         lower_log = task_log.lower()
-        return "project not found" in lower_log or "could not read" in lower_log \
+        return (
+            "project not found" in lower_log
+            or "could not read" in lower_log
             or "could not be found" in lower_log
+        )
 
     def fix_suggestion(self, task_log: str) -> dict[str, Any]:
         return {
@@ -117,6 +120,7 @@ class ModuleNotFoundRule(RepairRule):
         for line in task_log.split("\n"):
             if "modulenotfounderror" in line.lower() or "importerror" in line.lower():
                 import re
+
                 match = re.search(r"no module named ['\"]?(\w[\w.-]*)", line.lower())
                 if match:
                     missing_module = match.group(1)

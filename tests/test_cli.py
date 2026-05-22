@@ -196,42 +196,45 @@ class TestClearmlQueuesCmd:
     """expflow clearml queues sub-command."""
 
     def test_queues_list(self, mock_clearml_cli):
-        mock_clearml_cli.Queue.get_queues.return_value = [
-            _make_mock_queue("q1", "default"),
-            _make_mock_queue("q2", "gpu_queue"),
-        ]
-
+        mock_data = {
+            "queues": [
+                {"id": "q1", "name": "default"},
+                {"id": "q2", "name": "gpu_queue"},
+            ]
+        }
         for mod in ["expflow.clearml", "expflow.cli_clearml"]:
             if mod in sys.modules:
                 del sys.modules[mod]
 
-        result = runner.invoke(app, ["clearml", "queues"])
+        with patch("expflow_pde.clearml._call_queue_service", return_value=mock_data):
+            result = runner.invoke(app, ["clearml", "queues"])
         assert result.exit_code == 0
         assert "q1" in result.stdout
         assert "default" in result.stdout
         assert "gpu_queue" in result.stdout
 
     def test_queues_empty(self, mock_clearml_cli):
-        mock_clearml_cli.Queue.get_queues.return_value = []
-
         for mod in ["expflow.clearml", "expflow.cli_clearml"]:
             if mod in sys.modules:
                 del sys.modules[mod]
 
-        result = runner.invoke(app, ["clearml", "queues"])
+        with patch("expflow_pde.clearml._call_queue_service", return_value={"queues": []}):
+            result = runner.invoke(app, ["clearml", "queues"])
         assert result.exit_code == 0
         assert "No queues found." in result.stdout
 
     def test_queue_status(self, mock_clearml_cli):
-        mock_q = _make_mock_queue("q1", "default")
-        mock_q.entries = []
-        mock_clearml_cli.Queue.get_queue.return_value = mock_q
-
+        mock_data = {
+            "queues": [
+                {"id": "q1", "name": "default", "entries": []},
+            ]
+        }
         for mod in ["expflow.clearml", "expflow.cli_clearml"]:
             if mod in sys.modules:
                 del sys.modules[mod]
 
-        result = runner.invoke(app, ["clearml", "queue-status", "default"])
+        with patch("expflow_pde.clearml._call_queue_service", return_value=mock_data):
+            result = runner.invoke(app, ["clearml", "queue-status", "default"])
         assert result.exit_code == 0
         assert "Queue: default" in result.stdout
         assert "Pending:" in result.stdout

@@ -60,7 +60,8 @@ def step(
         None, "--strategy", help="Strategy name for branch link"
     ),
     inject: Optional[str] = typer.Option(
-        None, "--inject",
+        None,
+        "--inject",
         help=(
             "Failure pattern to inject: "
             "git_not_found, module_not_found, cuda_oom, "
@@ -148,7 +149,9 @@ def auto(
             suggested_params=suggested or None,
             strategy=strategy,
         )
-        print(f"  Result: status={result['status']}, seg={result['seg']}, total={result['total']:.1f}")
+        print(
+            f"  Result: status={result['status']}, seg={result['seg']}, total={result['total']:.1f}"
+        )
 
         # Repair if failed
         if result["status"] == "failed" and repair:

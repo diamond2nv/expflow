@@ -269,7 +269,16 @@ class TestLpLoss:
 
 class TestLossSelector:
     def test_all_names_return_module(self):
-        names = ["l1_rel", "l2_rel", "h1_1d", "h1_2d", "mse_rel", "smoothl1_rel", "l2_abs", "mse_abs"]
+        names = [
+            "l1_rel",
+            "l2_rel",
+            "h1_1d",
+            "h1_2d",
+            "mse_rel",
+            "smoothl1_rel",
+            "l2_abs",
+            "mse_abs",
+        ]
         x_1d = torch.randn(4, 64, 1)
         y_1d = torch.randn(4, 64, 1)
         x_2d = torch.randn(4, 32, 32, 1)

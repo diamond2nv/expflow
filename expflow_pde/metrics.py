@@ -157,6 +157,7 @@ def get_metric_threshold(metric_name: str) -> float | None:
 def _get_torch():
     """Lazy-load torch — only imported when compute functions are called."""
     import torch
+
     return torch
 
 

@@ -30,6 +30,7 @@ _Proc = subprocess.CompletedProcess[str]
 
 class WorktreeRecord(TypedDict):
     """Shape of a persisted worktree registry entry."""
+
     branch: str
     worktree_path: str
     created_at: float
@@ -37,6 +38,7 @@ class WorktreeRecord(TypedDict):
 
 class WorktreeResult(TypedDict):
     """Result of create_experiment_worktree."""
+
     worktree_path: str
     branch: str
     commit_hash: str
@@ -45,12 +47,14 @@ class WorktreeResult(TypedDict):
 
 class CleanupResult(TypedDict):
     """Result of cleanup_worktree."""
+
     branch: str
     status: str
 
 
 class StashResult(TypedDict):
     """Result of submit_via_stash."""
+
     branch: str
     commit_hash: str
     experiment_id: str
@@ -258,9 +262,7 @@ def list_worktrees(repo_path: str | None = None) -> list[WorktreeRecord]:
     return result
 
 
-def cleanup_all_stale(
-    repo_path: str | None = None, max_age_hours: int = 24
-) -> list[CleanupResult]:
+def cleanup_all_stale(repo_path: str | None = None, max_age_hours: int = 24) -> list[CleanupResult]:
     """Clean all stale worktrees older than max_age_hours.
 
     Args:
@@ -277,9 +279,7 @@ def cleanup_all_stale(
     for wt in list_worktrees(repo):
         created = wt.get("created_at", 0)
         if created and (time.time() - created) > max_age_hours * 3600:
-            cleaned.append(
-                cleanup_worktree(wt["branch"], wt["worktree_path"], repo)
-            )
+            cleaned.append(cleanup_worktree(wt["branch"], wt["worktree_path"], repo))
     return cleaned
 
 

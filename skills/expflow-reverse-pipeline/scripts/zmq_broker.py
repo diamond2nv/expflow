@@ -214,7 +214,8 @@ class Subscriber:
             self._sockets.append(sock)
             _log.info(
                 "ZMQ SUB connected to %s (topics: %s)",
-                IPC_SUB, self._subscriptions,
+                IPC_SUB,
+                self._subscriptions,
             )
 
         if self._use_tcp:
@@ -228,7 +229,8 @@ class Subscriber:
             self._sockets.append(sock)
             _log.info(
                 "ZMQ SUB connected to %s (topics: %s)",
-                addr, self._subscriptions,
+                addr,
+                self._subscriptions,
             )
 
     def poll(self, timeout_ms: Optional[int] = None) -> list[dict]:
@@ -247,11 +249,13 @@ class Subscriber:
                     topic = sock.recv_string(zmq.DONTWAIT)
                     body = sock.recv(zmq.DONTWAIT)
                     payload = json.loads(body.decode("utf-8"))
-                    events.append({
-                        "topic": topic,
-                        "payload": payload,
-                        "source": str(sock),
-                    })
+                    events.append(
+                        {
+                            "topic": topic,
+                            "payload": payload,
+                            "source": str(sock),
+                        }
+                    )
             except zmq.ZMQError:
                 continue
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -268,9 +272,7 @@ class Subscriber:
 
     def unsubscribe(self, topic_prefix: str) -> None:
         """Remove a topic subscription."""
-        self._subscriptions = [
-            t for t in self._subscriptions if t != topic_prefix
-        ]
+        self._subscriptions = [t for t in self._subscriptions if t != topic_prefix]
         for sock in self._sockets:
             try:
                 sock.setsockopt_string(zmq.UNSUBSCRIBE, topic_prefix)

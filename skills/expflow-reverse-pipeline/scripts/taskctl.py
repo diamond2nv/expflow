@@ -44,6 +44,7 @@ from typing import Any
 # --- Optional ZMQ (graceful import fallback) ---
 try:
     import zmq as _zmq  # noqa: F401
+
     HAS_ZMQ = True
 except ImportError:
     HAS_ZMQ = False
@@ -66,8 +67,8 @@ DEFAULT_PUB_PORT = 15556
 DEFAULT_SUB_PORT = 15557
 MAX_TASKS = 50
 TIMEOUT_MULTIPLIER = 1.5
-CHAIN_TIMEOUT = 300       # Max seconds per chain command
-IDLE_THRESHOLD = 4        # Consecutive empty checks before frequency drop
+CHAIN_TIMEOUT = 300  # Max seconds per chain command
+IDLE_THRESHOLD = 4  # Consecutive empty checks before frequency drop
 
 # Structured JSON log keys (persistent, rotation)
 LOG_KEYS = ["ts", "level", "event", "task_id", "pid", "duration", "context", "error"]
@@ -122,9 +123,7 @@ logging.setLoggerClass(StructuredLogger)
 _handler = logging.handlers.RotatingFileHandler(
     LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
 )
-_handler.setFormatter(
-    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-)
+_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 _log = logging.getLogger("taskctl")
 _log.setLevel(logging.INFO)
 _log.addHandler(_handler)
@@ -181,7 +180,11 @@ class TaskLock:
                     # Refresh our lock
                     pass
                 elif now - data.get("ts", 0) < ttl:
-                    _log.debug("Lock held by %s (expires in %.0fs)", data["task_id"], ttl - (now - data["ts"]))
+                    _log.debug(
+                        "Lock held by %s (expires in %.0fs)",
+                        data["task_id"],
+                        ttl - (now - data["ts"]),
+                    )
                     return False
             # Write lock
             self._lock_file.write_text(
@@ -391,20 +394,24 @@ def execute_chain_multiple(
         for cmd, p in procs:
             try:
                 p.wait(timeout=CHAIN_TIMEOUT)
-                results.append({
-                    "task_id": task_id,
-                    "chain_cmd": cmd[:100],
-                    "success": p.returncode == 0,
-                    "exit_code": p.returncode,
-                })
+                results.append(
+                    {
+                        "task_id": task_id,
+                        "chain_cmd": cmd[:100],
+                        "success": p.returncode == 0,
+                        "exit_code": p.returncode,
+                    }
+                )
             except subprocess.TimeoutExpired:
                 p.kill()
-                results.append({
-                    "task_id": task_id,
-                    "chain_cmd": cmd[:100],
-                    "success": False,
-                    "error": f"Timeout ({CHAIN_TIMEOUT}s)",
-                })
+                results.append(
+                    {
+                        "task_id": task_id,
+                        "chain_cmd": cmd[:100],
+                        "success": False,
+                        "error": f"Timeout ({CHAIN_TIMEOUT}s)",
+                    }
+                )
         return results
     else:
         # Serial execution
@@ -427,9 +434,7 @@ def send_notification(message: str) -> bool:
 
     for attempt in range(3):
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 return True
             _log.warning(
@@ -490,11 +495,9 @@ def _should_skip_check() -> bool:
     to once per hour (skipping 3 out of 4 checks).
     """
     global _idle_counter
-    is_empty = (
-        not TASKS_FILE.exists()
-        or not json.loads(TASKS_FILE.read_text(encoding="utf-8"))
-        .get("tasks", [])
-    )
+    is_empty = not TASKS_FILE.exists() or not json.loads(
+        TASKS_FILE.read_text(encoding="utf-8")
+    ).get("tasks", [])
 
     if is_empty:
         _idle_counter += 1
@@ -755,10 +758,7 @@ def cmd_list(args: argparse.Namespace) -> None:
             pct = min(100, elapsed / t["expected_duration_s"] * 100)
             print(f"  [OK] {t['id']}")
             print(f"    {t['context'][:80]}")
-            print(
-                f"    pid={t['pid']}  "
-                f"{elapsed:.0f}s / {t['expected_duration_s']}s ({pct:.0f}%)"
-            )
+            print(f"    pid={t['pid']}  {elapsed:.0f}s / {t['expected_duration_s']}s ({pct:.0f}%)")
 
     if done:
         print("-- Done --")
@@ -793,8 +793,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
     save_tasks(active + recent_done)
     cleared = before - len(active + recent_done)
     print(
-        f"[OK] Cleared {cleared}. Remaining: {len(active)} running "
-        f"+ {len(recent_done)} recent done"
+        f"[OK] Cleared {cleared}. Remaining: {len(active)} running + {len(recent_done)} recent done"
     )
     _log.info(
         "Cleared %d stale tasks",
@@ -842,7 +841,9 @@ def main() -> None:
     # daemon (ZMQ broker)
     p_daemon = sub.add_parser("daemon", help="Start ZMQ event broker daemon")
     p_daemon.add_argument(
-        "--port", type=int, default=DEFAULT_PUB_PORT,
+        "--port",
+        type=int,
+        default=DEFAULT_PUB_PORT,
         help="ZMQ PUB port (default: 15556)",
     )
 

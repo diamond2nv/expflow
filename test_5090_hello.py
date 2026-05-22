@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """Minimal test: verify clearml agent can run a task on 5090."""
 
-import socket
 import os
+import socket
 import sys
 
 # 检查 clearml
 try:
     from clearml import Task
+
     task = Task.init(project_name="PDEBench Task1", task_name="5090_hello_test")
     task.connect({"hostname": socket.gethostname(), "user": os.environ.get("USER", "?")})
     print(f"[OK] Hostname: {socket.gethostname()}")

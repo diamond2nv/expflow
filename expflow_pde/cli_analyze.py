@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """expflow analyze CLI — PDE competition task intelligence and strategic advising."""
 
+import json
 from typing import Optional
 
-import json
 import typer
 
 analyze_app = typer.Typer(
@@ -260,9 +260,7 @@ def analyze_help_cmd() -> None:
 
 @analyze_app.command("losses")
 def losses_cmd(
-    name: Optional[str] = typer.Argument(
-        None, help="Show details for a specific loss function"
-    ),
+    name: Optional[str] = typer.Argument(None, help="Show details for a specific loss function"),
 ) -> None:
     """List all available PDE loss functions or show details for one."""
 
@@ -343,10 +341,8 @@ def losses_cmd(
 
 @analyze_app.command("diagnose")
 def diagnose_cmd(
-    task_id: str | None = typer.Option(None, "--task", "-t",
-        help="ClearML task ID"),
-    json_path: str | None = typer.Option(None, "--json", "-j",
-        help="Path to local eval JSON file"),
+    task_id: str | None = typer.Option(None, "--task", "-t", help="ClearML task ID"),
+    json_path: str | None = typer.Option(None, "--json", "-j", help="Path to local eval JSON file"),
 ) -> None:
     """Analyze experiment and identify degradation patterns."""
     if not task_id and not json_path:
@@ -361,21 +357,21 @@ def diagnose_cmd(
         print(f"Cannot load experiment ({src})")
         raise typer.Exit(code=1)
 
-    print(f"  Seg1: {result['seg1']:>6.2f}  | Seg2: {result['seg2']:>6.2f}  "
-          f"| Seg3: {result['seg3']:>6.2f}  | Total: {result['total']:>6.2f}")
+    print(
+        f"  Seg1: {result['seg1']:>6.2f}  | Seg2: {result['seg2']:>6.2f}  "
+        f"| Seg3: {result['seg3']:>6.2f}  | Total: {result['total']:>6.2f}"
+    )
     print(f"  MSE:  {result['total_mse']:.6f}")
     print(f"  Pattern: {result['degradation_pattern']}")
-    print(f"  Diagnosis:")
-    for d in result['diagnosis']:
+    print("  Diagnosis:")
+    for d in result["diagnosis"]:
         print(f"    - {d}")
 
 
 @analyze_app.command("suggest")
 def suggest_cmd(
-    task_id: str | None = typer.Option(None, "--task", "-t",
-        help="ClearML task ID"),
-    json_path: str | None = typer.Option(None, "--json", "-j",
-        help="Path to eval JSON file"),
+    task_id: str | None = typer.Option(None, "--task", "-t", help="ClearML task ID"),
+    json_path: str | None = typer.Option(None, "--json", "-j", help="Path to eval JSON file"),
 ) -> None:
     """Analyze experiment and suggest next hyperparameters."""
     from expflow_pde.analyze import diagnose_experiment, suggest_next_params
@@ -390,21 +386,21 @@ def suggest_cmd(
 
     suggestion = suggest_next_params(diagnosis, current_hparams=hp)
 
-    print(f"\n  Diagnosis:")
+    print("\n  Diagnosis:")
     print(f"    Pattern: {diagnosis['degradation_pattern']}")
-    for d in diagnosis['diagnosis']:
+    for d in diagnosis["diagnosis"]:
         print(f"    - {d}")
 
     params = suggestion.get("suggested_params", {})
     rationale = suggestion.get("rationale", [])
 
-    print(f"\n  Suggested params:")
+    print("\n  Suggested params:")
     for k, v in params.items():
         if k == "tag":
             continue
         print(f"    --{k}={v}")
 
-    print(f"\n  Rationale:")
+    print("\n  Rationale:")
     for r in rationale:
         print(f"    - {r}")
 
@@ -412,8 +408,7 @@ def suggest_cmd(
 @analyze_app.command("deep")
 def deep_cmd(
     task_id: str = typer.Argument(..., help="ClearML task ID"),
-    wiki: bool = typer.Option(True, "--wiki/--no-wiki",
-        help="Include wiki context in analysis"),
+    wiki: bool = typer.Option(True, "--wiki/--no-wiki", help="Include wiki context in analysis"),
 ) -> None:
     """Deep analysis with reasoning model (requires deepseek-v4-pro).
 
@@ -425,41 +420,44 @@ def deep_cmd(
     from expflow_pde.analyze import diagnose_experiment, get_task_meta
 
     # Step 1: Rule engine (0 token)
-    print(f"  [1/3] Rule engine diagnosis...")
+    print("  [1/3] Rule engine diagnosis...")
     diagnosis = diagnose_experiment(task_id=task_id)
     if diagnosis is None:
         print(f"  Cannot load experiment: {task_id}")
         raise typer.Exit(code=1)
 
     print(f"    Pattern: {diagnosis['degradation_pattern']}")
-    for d in diagnosis['diagnosis']:
+    for d in diagnosis["diagnosis"]:
         print(f"    - {d}")
 
     # Step 2: Context
-    print(f"\n  [2/3] Loading context...")
+    print("\n  [2/3] Loading context...")
     task_meta = get_task_meta()
 
     # Print what would be included in deep analysis
     print(f"    Task metadata loaded: {list(task_meta.keys())}")
-    print(f"    Wiki pages available: ~/wiki/entities/, ~/wiki/concepts/")
+    print("    Wiki pages available: ~/wiki/entities/, ~/wiki/concepts/")
 
     # Step 3: Instruction for the reasoning model
-    print(f"\n  [3/3] Deep analysis prompt (ready for deepseek-v4-pro):")
+    print("\n  [3/3] Deep analysis prompt (ready for deepseek-v4-pro):")
     print(f"    {'=' * 55}")
     print(f"    Analyze experiment {task_id} with reasoning:")
-    print(f"    - Seg scores: {diagnosis.get('seg1')}, {diagnosis.get('seg2')}, "
-          f"{diagnosis.get('seg3')}")
+    print(
+        f"    - Seg scores: {diagnosis.get('seg1')}, {diagnosis.get('seg2')}, "
+        f"{diagnosis.get('seg3')}"
+    )
     print(f"    - Pattern: {diagnosis['degradation_pattern']}")
-    print(f"    - Current task knowledge: {json.dumps(task_meta.get('task1', {}).get('proven_strategies', []), indent=2)}")
+    print(
+        f"    - Current task knowledge: {json.dumps(task_meta.get('task1', {}).get('proven_strategies', []), indent=2)}"
+    )
     print(f"    {'=' * 55}")
-    print(f"\n  To run with deepseek-v4-pro:")
-    print(f"    hermes \"Deep analysis of experiment {task_id}\"")
+    print("\n  To run with deepseek-v4-pro:")
+    print(f'    hermes "Deep analysis of experiment {task_id}"')
 
 
 @analyze_app.command("sync")
 def sync_cmd(
-    project: str = typer.Option("PDEBench", "--project", "-p",
-        help="clearml project name"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="clearml project name"),
 ) -> None:
     """Sync task metadata from clearml completed experiments."""
     from expflow_pde.analyze import sync_task_meta_from_clearml
@@ -468,10 +466,12 @@ def sync_cmd(
     result = sync_task_meta_from_clearml(project_name=project)
     updated = result.get("updated", [])
     if not updated:
-        print(f"  No updates found.")
+        print("  No updates found.")
         return
 
     print(f"  Updated {len(updated)} tasks:")
     for u in updated:
-        print(f"    {u['task_id']}: {u['previous_best']} -> {u['new_best']} "
-              f"(task: {u['best_task_id']})")
+        print(
+            f"    {u['task_id']}: {u['previous_best']} -> {u['new_best']} "
+            f"(task: {u['best_task_id']})"
+        )

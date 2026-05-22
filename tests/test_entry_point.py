@@ -197,7 +197,10 @@ class TestEntryPointMissingDep:
             assert clearml_result.returncode == 1, (
                 f"Expected non-zero, got: {clearml_result.stdout}"
             )
-            assert "No module named 'clearml'" in clearml_result.stderr or "ModuleNotFoundError: No module named 'clearml'" in clearml_result.stderr
+            assert (
+                "No module named 'clearml'" in clearml_result.stderr
+                or "ModuleNotFoundError: No module named 'clearml'" in clearml_result.stderr
+            )
 
             # optuna command without optuna SDK -> graceful error
             optuna_result = subprocess.run(
@@ -207,4 +210,7 @@ class TestEntryPointMissingDep:
                 timeout=10,
             )
             assert optuna_result.returncode == 1, f"Expected non-zero, got: {optuna_result.stdout}"
-            assert "No module named 'optuna'" in optuna_result.stderr or "ModuleNotFoundError: No module named 'optuna'" in optuna_result.stderr
+            assert (
+                "No module named 'optuna'" in optuna_result.stderr
+                or "ModuleNotFoundError: No module named 'optuna'" in optuna_result.stderr
+            )

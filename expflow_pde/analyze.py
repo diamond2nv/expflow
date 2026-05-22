@@ -14,9 +14,8 @@ Usage:
     )
 """
 
-from typing import Any
-
 import os
+from typing import Any
 
 from expflow_pde.equations import (
     get_equation,
@@ -96,6 +95,7 @@ def _load_task_meta() -> dict[str, dict[str, Any]]:
         return {}
     try:
         import yaml
+
         with open(path) as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
@@ -113,6 +113,7 @@ def update_task_meta(task_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     meta[task_id].update(updates)
     try:
         import yaml
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             yaml.safe_dump(meta, f, default_flow_style=False, allow_unicode=True)
@@ -277,14 +278,10 @@ def _compute_convergence_estimate(
     # Estimate gain decay ratio from the last few steps
     gain_decay = 0.5  # default halving
     if len(gains) >= 2:
-        decay_ratios = [
-            gains[i + 1] / max(1e-8, gains[i]) for i in range(len(gains) - 1)
-        ]
+        decay_ratios = [gains[i + 1] / max(1e-8, gains[i]) for i in range(len(gains) - 1)]
         # Clamp decay to [0, 1) — negative or >1 values are unphysical for
         # the geometric series formula a / (1 - r)
-        filtered_ratios = [
-            max(0.0, min(r, 0.99)) for r in decay_ratios if r > 0
-        ]
+        filtered_ratios = [max(0.0, min(r, 0.99)) for r in decay_ratios if r > 0]
         if filtered_ratios:
             gain_decay = min(filtered_ratios)
         else:
@@ -306,8 +303,7 @@ def _compute_convergence_estimate(
     # Confidence based on stability of decline + prediction interval width
     if len(gains) >= 3:
         stable = all(
-            0.3 <= gains[i + 1] / max(1e-8, gains[i]) <= 2.0
-            for i in range(len(gains) - 1)
+            0.3 <= gains[i + 1] / max(1e-8, gains[i]) <= 2.0 for i in range(len(gains) - 1)
         )
         # Prediction interval: wider = lower confidence
         pi_ratio = asymptotic_gain / max(abs(last_gain), 1.0)
@@ -376,8 +372,7 @@ def estimate_score_potential(
             "expected": 90,
             "conservative": 60,
             "confidence": "low",
-            "note": "Hardcoded estimate (no seg_history provided). "
-            "Nu generalization gap unknown.",
+            "note": "Hardcoded estimate (no seg_history provided). Nu generalization gap unknown.",
         }
     elif task_id == "task3":
         return {
@@ -432,9 +427,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
                     "Invest remaining time in a Task 3 baseline run."
                 ),
                 "secondary_focus": "task1",
-                "secondary_rationale": (
-                    "Fine-tune Task 1 submission with current best config."
-                ),
+                "secondary_rationale": ("Fine-tune Task 1 submission with current best config."),
                 "tertiary_focus": None,
                 "tertiary_rationale": (
                     "Task 2 not viable: starting from scratch with "
@@ -458,9 +451,7 @@ def get_strategic_recommendation() -> dict[str, Any]:
                     "remaining focus all remaining submissions here."
                 ),
                 "secondary_focus": None,
-                "secondary_rationale": (
-                    "No time to start Task 2 or 3 from scratch."
-                ),
+                "secondary_rationale": ("No time to start Task 2 or 3 from scratch."),
                 "tertiary_focus": None,
                 "tertiary_rationale": "",
                 "suggested_schedule": {
@@ -701,17 +692,13 @@ def diagnose_experiment(
         seg1 = seg.get("seg1_score", seg.get("seg1", seg.get("Seg1", 0)))
         seg2 = seg.get("seg2_score", seg.get("seg2", seg.get("Seg2", 0)))
         seg3 = seg.get("seg3_score", seg.get("seg3", seg.get("Seg3", 0)))
-        total = seg.get(
-            "total_segmented_score", seg.get("total", seg.get("Total", 0))
-        )
+        total = seg.get("total_segmented_score", seg.get("total", seg.get("Total", 0)))
     else:
         seg1 = seg2 = seg3 = total = 0
 
     # Extract total_mse from possibly nested results dict
     results = metrics.get("results", {})
-    total_mse = results.get(
-        "total_mse", metrics.get("total_mse", metrics.get("Total MSE", 0))
-    )
+    total_mse = results.get("total_mse", metrics.get("total_mse", metrics.get("Total MSE", 0)))
     if not isinstance(total_mse, (int, float)):
         total_mse = 0.0
 
@@ -741,7 +728,9 @@ def diagnose_experiment(
 
     # Detect ceiling: Seg1 below threshold but Seg2 close and Seg3 not collapsing
     is_ceiling = (
-        s1 < ceiling_seg1_high and s2 > 0 and s3 > 0
+        s1 < ceiling_seg1_high
+        and s2 > 0
+        and s3 > 0
         and (s1 - s2) < ceiling_gap
         and s3 > s2 * ceiling_seg3_ratio
     )
@@ -749,8 +738,7 @@ def diagnose_experiment(
 
     if is_ceiling:
         diagnosis.append(
-            "Score ceiling — Seg uniformly low but stable "
-            "(model capacity or data limit)"
+            "Score ceiling — Seg uniformly low but stable (model capacity or data limit)"
         )
         degradation_pattern = "ceiling"
 
@@ -759,16 +747,12 @@ def diagnose_experiment(
         degradation_pattern = "short_term"
 
     # Medium-term — detect independently (not mutually exclusive)
-    mid_term_detected = (
-        s1 > 0 and s2 > 0 and (s1 - s2) > mid_gap
-    )
+    mid_term_detected = s1 > 0 and s2 > 0 and (s1 - s2) > mid_gap
     if mid_term_detected:
         diagnosis.append("Medium-term stability degraded (Seg2 drops >%d from Seg1)" % int(mid_gap))
 
     # Long-term — detect independently
-    long_term_detected = (
-        s3 < long_seg3_low or (s2 > 0 and s3 < s2 * long_seg3_seg2_ratio)
-    )
+    long_term_detected = s3 < long_seg3_low or (s2 > 0 and s3 < s2 * long_seg3_seg2_ratio)
     if long_term_detected:
         diagnosis.append("Long-term autoregressive collapse (Seg3 collapse)")
 
@@ -788,14 +772,8 @@ def diagnose_experiment(
             degradation_pattern = "mid_term"
 
     # Distribution shift (independent check)
-    if (
-        s1 > 0 and s2 > 0 and s3 > 0
-        and max(s1, s2, s3) < dist_max_seg
-        and mse < dist_mse_high
-    ):
-        diagnosis.append(
-            "Consistent underperformance — possible IC distribution mismatch"
-        )
+    if s1 > 0 and s2 > 0 and s3 > 0 and max(s1, s2, s3) < dist_max_seg and mse < dist_mse_high:
+        diagnosis.append("Consistent underperformance — possible IC distribution mismatch")
         if degradation_pattern == "stable":
             degradation_pattern = "distribution_shift"
 
@@ -807,9 +785,7 @@ def diagnose_experiment(
         "seg2": round(float(seg2), 2) if isinstance(seg2, (int, float)) else 0,
         "seg3": round(float(seg3), 2) if isinstance(seg3, (int, float)) else 0,
         "total": round(float(total), 2) if isinstance(total, (int, float)) else 0,
-        "total_mse": (
-            round(float(total_mse), 6) if isinstance(total_mse, (int, float)) else 0
-        ),
+        "total_mse": (round(float(total_mse), 6) if isinstance(total_mse, (int, float)) else 0),
         "diagnosis": diagnosis,
         "degradation_pattern": degradation_pattern,
     }
@@ -842,11 +818,15 @@ def suggest_next_params(
     suggestions: dict = {}
     rationale: list[str] = []
 
-    if pattern == "long_term" or pattern == "compound_mid_long" or (
-        isinstance(seg3, (int, float))
-        and seg3 < 30
-        and isinstance(seg1, (int, float))
-        and seg1 > _FALLBACK_SEG1_LOW.get(task_id, 60)
+    if (
+        pattern == "long_term"
+        or pattern == "compound_mid_long"
+        or (
+            isinstance(seg3, (int, float))
+            and seg3 < 30
+            and isinstance(seg1, (int, float))
+            and seg1 > _FALLBACK_SEG1_LOW.get(task_id, 60)
+        )
     ):
         current_modes = int(hp.get("n_modes", 12))
         suggestions["n_modes"] = min(current_modes + 4, 24)
@@ -858,23 +838,17 @@ def suggest_next_params(
             "to capture more spatial frequencies"
         )
         rationale.append(
-            "Add sub_step=5 to fix dt mismatch between "
-            "training (0.01) and inference (0.05)"
+            "Add sub_step=5 to fix dt mismatch between training (0.01) and inference (0.05)"
         )
         if not hp.get("weight_decay"):
             suggestions["weight_decay"] = 1e-4
-            rationale.append(
-                "Add weight_decay=1e-4 (HyperNOs Burgers best practice)"
-            )
+            rationale.append("Add weight_decay=1e-4 (HyperNOs Burgers best practice)")
 
     elif pattern == "mid_term":
         suggestions["tag"] = "auto_mid_fix"
         if "stability_lambda" not in hp or not hp.get("stability_lambda"):
             suggestions["stability_lambda"] = 0.001
-            rationale.append(
-                "Seg2 drop: add step-wise stability penalty "
-                "(stability_lambda=0.001)"
-            )
+            rationale.append("Seg2 drop: add step-wise stability penalty (stability_lambda=0.001)")
 
     elif pattern == "ceiling":
         current_modes = int(hp.get("n_modes", 12))
@@ -906,9 +880,7 @@ def suggest_next_params(
 
     else:
         suggestions["tag"] = "auto_hpo_round"
-        rationale.append(
-            "Experiment stable. Run targeted HPO on remaining strategies."
-        )
+        rationale.append("Experiment stable. Run targeted HPO on remaining strategies.")
 
     return {
         "suggested_params": suggestions,
@@ -977,19 +949,24 @@ def sync_task_meta_from_clearml(
 
         # Update if better
         if new_total > current_best:
-            update_task_meta(task_id, {
-                "current_best_seg": round(float(new_total), 2),
-                "current_best_total": round(float(new_total), 2),
-                "remaining_headroom": max(
-                    0,
-                    (meta.get("max_score") or 150) - new_total,
-                ),
-            })
-            updated.append({
-                "task_id": task_id,
-                "previous_best": current_best,
-                "new_best": new_total,
-                "best_task_id": best_task.get("id"),
-            })
+            update_task_meta(
+                task_id,
+                {
+                    "current_best_seg": round(float(new_total), 2),
+                    "current_best_total": round(float(new_total), 2),
+                    "remaining_headroom": max(
+                        0,
+                        (meta.get("max_score") or 150) - new_total,
+                    ),
+                },
+            )
+            updated.append(
+                {
+                    "task_id": task_id,
+                    "previous_best": current_best,
+                    "new_best": new_total,
+                    "best_task_id": best_task.get("id"),
+                }
+            )
 
     return {"updated": updated, "message": f"Synced {len(updated)} tasks"}

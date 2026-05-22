@@ -8,6 +8,7 @@ across sessions (e.g. overnight runs that exceed context window).
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -16,6 +17,27 @@ from typing import Any
 logger = logging.getLogger("expflow_pde.goal_orchestrator")
 
 _PROGRESS_PATH = os.path.expanduser("~/.expflow/progress_state.json")
+
+
+def _write_with_flock(state: dict[str, Any], path: str) -> None:
+    """Write JSON state with fcntl.flock for concurrency safety.
+
+    Falls back to plain write on non-Linux platforms where fcntl
+    is not available or applicable.
+    """
+    try:
+        with open(path, "w") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (OSError, IOError):
+        # Non-Linux platform or unsupported fs: fall back to plain write
+        with open(path, "w") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
 
 
 class GoalOrchestrator:
@@ -34,11 +56,12 @@ class GoalOrchestrator:
     def save(state: dict[str, Any]) -> str:
         """Persist progress state to ~/.expflow/progress_state.json.
 
+        Uses fcntl.flock for concurrency safety. On non-Linux platforms
+        (where fcntl may not apply), the lock is silently skipped.
         Always overwrites (only one active goal session).
         """
         os.makedirs(os.path.dirname(_PROGRESS_PATH), exist_ok=True)
-        with open(_PROGRESS_PATH, "w") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
+        _write_with_flock(state, _PROGRESS_PATH)
         logger.debug("Progress saved to %s", _PROGRESS_PATH)
         return _PROGRESS_PATH
 

@@ -29,7 +29,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-
 # ─── Snowflake ID generator (yitter drift algorithm, port from hfpapers) ───
 
 _SNOWFLAKE_LOCK = threading.Lock()
@@ -149,23 +148,53 @@ def _get_db_path() -> str:
 
 # ─── Validity bits for status/type CHECK constraints ───
 
-_VALID_STATUSES = frozenset({
-    "pending", "queued", "running", "completed", "failed", "cancelled", "pruned",
-})
+_VALID_STATUSES = frozenset(
+    {
+        "pending",
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "pruned",
+    }
+)
 
-_VALID_FSM_STATES = frozenset({
-    "ideation", "hpo_tuning", "training", "evaluation",
-    "submission", "review", "archived",
-})
+_VALID_FSM_STATES = frozenset(
+    {
+        "ideation",
+        "hpo_tuning",
+        "training",
+        "evaluation",
+        "submission",
+        "review",
+        "archived",
+    }
+)
 
-_VALID_ARTIFACT_TYPES = frozenset({
-    "checkpoint", "plot", "dataset", "log", "submission", "report",
-})
+_VALID_ARTIFACT_TYPES = frozenset(
+    {
+        "checkpoint",
+        "plot",
+        "dataset",
+        "log",
+        "submission",
+        "report",
+    }
+)
 
-_VALID_EVENT_TYPES = frozenset({
-    "submit", "status_change", "hpo_trial", "repair",
-    "deploy", "error", "cancel", "callback",
-})
+_VALID_EVENT_TYPES = frozenset(
+    {
+        "submit",
+        "status_change",
+        "hpo_trial",
+        "repair",
+        "deploy",
+        "error",
+        "cancel",
+        "callback",
+    }
+)
 
 
 # ─── DispatchDB ───
@@ -335,8 +364,7 @@ class DispatchDB:
         """Idempotent schema migration (hfpapers pattern)."""
         with self._conn() as conn:
             has_version_col = conn.execute(
-                "SELECT COUNT(*) FROM pragma_table_info('experiments') "
-                "WHERE name = 'version'"
+                "SELECT COUNT(*) FROM pragma_table_info('experiments') WHERE name = 'version'"
             ).fetchone()[0]
             if has_version_col:
                 return
@@ -364,6 +392,7 @@ class DispatchDB:
         project: str = "expflow",
         tags: list[str] | None = None,
         source: str = "hermes",
+        result_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Register a new experiment. Returns the experiment record."""
         exp_id = _exp_id()
@@ -373,15 +402,28 @@ class DispatchDB:
             root_id = self._resolve_root_id(parent_id) or parent_id
         args_json = json.dumps(args or {})
         tags_json = json.dumps(tags or [])
+        summary_json = json.dumps(result_summary) if result_summary else None
 
         with self._write_tx() as conn:
             conn.execute(
                 """INSERT INTO experiments
                    (id, parent_id, root_id, script, args_json, tags_json,
-                    queue, project, source, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (exp_id, parent_id, root_id, script, args_json, tags_json,
-                 queue, project, source, now, now),
+                    queue, project, source, result_summary, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    exp_id,
+                    parent_id,
+                    root_id,
+                    script,
+                    args_json,
+                    tags_json,
+                    queue,
+                    project,
+                    source,
+                    summary_json,
+                    now,
+                    now,
+                ),
             )
 
             if parent_id:
@@ -391,16 +433,20 @@ class DispatchDB:
                 ).fetchone()
                 depth = (depth_row["depth"] + 1) if depth_row else 1
                 conn.execute(
-                    "INSERT INTO branches (parent_exp_id, child_exp_id, depth) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO branches (parent_exp_id, child_exp_id, depth) VALUES (?, ?, ?)",
                     (parent_id, exp_id, depth),
                 )
 
-            self._write_audit(conn, exp_id, "submit", {
-                "script": script,
-                "queue": queue,
-                "project": project,
-            })
+            self._write_audit(
+                conn,
+                exp_id,
+                "submit",
+                {
+                    "script": script,
+                    "queue": queue,
+                    "project": project,
+                },
+            )
 
         return {
             "experiment_id": exp_id,
@@ -442,8 +488,14 @@ class DispatchDB:
             params.append(now)
 
         for key, value in extra.items():
-            if key in ("clearml_task_id", "error_message", "branch",
-                       "commit_hash", "result_summary", "best_params_json"):
+            if key in (
+                "clearml_task_id",
+                "error_message",
+                "branch",
+                "commit_hash",
+                "result_summary",
+                "best_params_json",
+            ):
                 set_clauses.append(f"{key}=?")
                 params.append(str(value) if value is not None else None)
             elif key in ("best_value",):
@@ -457,19 +509,22 @@ class DispatchDB:
                 f"UPDATE experiments SET {', '.join(set_clauses)} WHERE id=?",
                 params,
             )
-            self._write_audit(conn, experiment_id, "status_change", {
-                "new_status": status,
-                "extra": {k: v for k, v in extra.items() if v is not None},
-            })
+            self._write_audit(
+                conn,
+                experiment_id,
+                "status_change",
+                {
+                    "new_status": status,
+                    "extra": {k: v for k, v in extra.items() if v is not None},
+                },
+            )
 
         return self.get_experiment(experiment_id)
 
     def get_experiment(self, experiment_id: str) -> dict[str, Any] | None:
         """Get a single experiment by ID."""
         with self._read_tx() as conn:
-            row = conn.execute(
-                "SELECT * FROM experiments WHERE id=?", (experiment_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM experiments WHERE id=?", (experiment_id,)).fetchone()
             return self._row_to_dict(row)
 
     def query_recent(
@@ -494,8 +549,7 @@ class DispatchDB:
 
         with self._read_tx() as conn:
             rows = conn.execute(
-                f"SELECT * FROM experiments {where} "
-                "ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM experiments {where} ORDER BY created_at DESC LIMIT ?",
                 [*params, limit],
             ).fetchall()
             return self._rows_to_list(rows)
@@ -504,8 +558,7 @@ class DispatchDB:
         """Get all experiments in a tree (by root_id)."""
         with self._read_tx() as conn:
             rows = conn.execute(
-                "SELECT * FROM experiments WHERE root_id=? "
-                "ORDER BY created_at ASC",
+                "SELECT * FROM experiments WHERE root_id=? ORDER BY created_at ASC",
                 (root_id,),
             ).fetchall()
             return self._rows_to_list(rows)
@@ -513,7 +566,9 @@ class DispatchDB:
     # ── Branches (tree tracking) ──
 
     def get_children(
-        self, experiment_id: str, include_subtree: bool = False,
+        self,
+        experiment_id: str,
+        include_subtree: bool = False,
     ) -> list[dict[str, Any]]:
         """Get child experiments. Optionally include full subtree."""
         with self._read_tx() as conn:
@@ -662,8 +717,16 @@ class DispatchDB:
                    (id, experiment_id, type, name, path, checksum,
                     size_bytes, metadata_json, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (artifact_id, experiment_id, artifact_type, name, path,
-                 checksum, size_bytes, metadata_json),
+                (
+                    artifact_id,
+                    experiment_id,
+                    artifact_type,
+                    name,
+                    path,
+                    checksum,
+                    size_bytes,
+                    metadata_json,
+                ),
             )
         return {
             "artifact_id": artifact_id,
@@ -673,7 +736,9 @@ class DispatchDB:
         }
 
     def get_artifacts(
-        self, experiment_id: str, artifact_type: str | None = None,
+        self,
+        experiment_id: str,
+        artifact_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get artifacts for an experiment."""
         with self._read_tx() as conn:
@@ -685,8 +750,7 @@ class DispatchDB:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM artifacts WHERE experiment_id=? "
-                    "ORDER BY created_at DESC",
+                    "SELECT * FROM artifacts WHERE experiment_id=? ORDER BY created_at DESC",
                     (experiment_id,),
                 ).fetchall()
             return self._rows_to_list(rows)
@@ -728,8 +792,7 @@ class DispatchDB:
 
         with self._read_tx() as conn:
             rows = conn.execute(
-                f"SELECT * FROM audit_log {where} "
-                "ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM audit_log {where} ORDER BY created_at DESC LIMIT ?",
                 [*params, limit],
             ).fetchall()
             return self._rows_to_list(rows)
@@ -737,7 +800,9 @@ class DispatchDB:
     # ── Internal helpers ──
 
     def _execute_read(
-        self, sql: str, params: tuple[Any, ...] = (),
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
     ) -> list[dict[str, Any]]:
         """Execute a read query and return results."""
         with self._read_tx() as conn:
@@ -750,7 +815,8 @@ class DispatchDB:
         with self._read_tx() as conn:
             total = conn.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
             by_status = {
-                r[0]: r[1] for r in conn.execute(
+                r[0]: r[1]
+                for r in conn.execute(
                     "SELECT status, COUNT(*) FROM experiments GROUP BY status"
                 ).fetchall()
             }
@@ -803,9 +869,7 @@ class DispatchDB:
             archive_dir = os.path.join(os.path.dirname(self.path), "archive")
             os.makedirs(archive_dir, exist_ok=True)
             ts = int(time.time())
-            archive_path = os.path.join(
-                archive_dir, f"pre-{before_date}-{ts}.db"
-            )
+            archive_path = os.path.join(archive_dir, f"pre-{before_date}-{ts}.db")
 
         # Find experiments to archive
         with self._read_tx() as conn:
@@ -882,7 +946,8 @@ class DispatchDB:
                         )
         except Exception as exc:
             self._write_audit_direct(
-                None, "archive",
+                None,
+                "archive",
                 {"action": "failed_phase1", "error": str(exc)},
             )
             raise
@@ -909,7 +974,8 @@ class DispatchDB:
             # Phase 2 failed but phase 1 succeeded = broken state.
             # Log the error — manual recovery needed.
             self._write_audit_direct(
-                None, "archive",
+                None,
+                "archive",
                 {
                     "action": "failed_phase2",
                     "error": str(exc),
@@ -924,7 +990,8 @@ class DispatchDB:
 
         # Write audit checkpoint AFTER successful move
         self._write_audit_direct(
-            None, "archive",
+            None,
+            "archive",
             {
                 "action": "committed",
                 "archive_path": archive_path,

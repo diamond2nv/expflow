@@ -15,16 +15,19 @@ iterate_app = typer.Typer(
 
 @iterate_app.command("run")
 def iterate_run_cmd(
-    task_id: Optional[str] = typer.Option(None, "--task", "-t",
-        help="Clearml task ID of completed experiment"),
-    json_path: Optional[str] = typer.Option(None, "--json", "-j",
-        help="Path to eval JSON file (alternative)"),
-    train_script: str = typer.Option("train_task1.py", "--train", "-T",
-        help="Base clearml task name for training"),
-    queue: str = typer.Option("default", "--queue", "-q",
-        help="Clearml queue"),
-    dry_run: bool = typer.Option(False, "--dry-run", "-n",
-        help="Preview suggestion without submitting"),
+    task_id: Optional[str] = typer.Option(
+        None, "--task", "-t", help="Clearml task ID of completed experiment"
+    ),
+    json_path: Optional[str] = typer.Option(
+        None, "--json", "-j", help="Path to eval JSON file (alternative)"
+    ),
+    train_script: str = typer.Option(
+        "train_task1.py", "--train", "-T", help="Base clearml task name for training"
+    ),
+    queue: str = typer.Option("default", "--queue", "-q", help="Clearml queue"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Preview suggestion without submitting"
+    ),
 ) -> None:
     """Diagnose -> suggest -> submit next experiment iteration."""
     from expflow_pde.iterate import run_iteration
@@ -48,13 +51,13 @@ def iterate_run_cmd(
     diag = result.get("diagnosis", {})
     sugg = result.get("suggestion", {})
 
-    print(f"\n  Diagnosis:")
+    print("\n  Diagnosis:")
     print(f"    Pattern: {diag.get('degradation_pattern', '?')}")
     for d in diag.get("diagnosis", []):
         print(f"    - {d}")
 
     params = sugg.get("suggested_params", {})
-    print(f"\n  Suggested params:")
+    print("\n  Suggested params:")
     for k, v in params.items():
         if k == "tag":
             continue

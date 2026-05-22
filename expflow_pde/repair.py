@@ -231,8 +231,10 @@ class RepairStage:
         exc_message = ""
         for line in reversed(tb_lines):
             stripped = line.strip()
-            if stripped and not stripped.startswith("File ") and not stripped.startswith(
-                "Traceback"
+            if (
+                stripped
+                and not stripped.startswith("File ")
+                and not stripped.startswith("Traceback")
             ):
                 if ":" in stripped:
                     exc_type = stripped.split(":")[0].strip()
@@ -268,8 +270,9 @@ class RepairStage:
 
     # ── L2: Reflection subagent────
 
-    def _try_l2(self, task_log: str, exit_code: int,
-               l1_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _try_l2(
+        self, task_log: str, exit_code: int, l1_result: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Prepare structured L2 reflection context for Hermes subagent.
 
         Returns a machine-readable dict that Hermes can consume to spawn a
@@ -384,20 +387,38 @@ class RepairStage:
 
     _EXC_TYPE_WIKI: list[dict[str, Any]] = [
         # Exact matches (highest priority)
-        {"match": "exact", "key": "ModuleNotFoundError",
-         "paths": ["~/wiki/troubleshooting/pip-dependencies.md"]},
-        {"match": "exact", "key": "torch.cuda.OutOfMemoryError",
-         "paths": ["~/wiki/troubleshooting/gpu-memory.md"]},
-        {"match": "exact", "key": "FileNotFoundError",
-         "paths": ["~/wiki/troubleshooting/data-paths.md"]},
+        {
+            "match": "exact",
+            "key": "ModuleNotFoundError",
+            "paths": ["~/wiki/troubleshooting/pip-dependencies.md"],
+        },
+        {
+            "match": "exact",
+            "key": "torch.cuda.OutOfMemoryError",
+            "paths": ["~/wiki/troubleshooting/gpu-memory.md"],
+        },
+        {
+            "match": "exact",
+            "key": "FileNotFoundError",
+            "paths": ["~/wiki/troubleshooting/data-paths.md"],
+        },
         # Prefix matches
-        {"match": "prefix", "key": "ImportError",
-         "paths": ["~/wiki/troubleshooting/pip-dependencies.md"]},
+        {
+            "match": "prefix",
+            "key": "ImportError",
+            "paths": ["~/wiki/troubleshooting/pip-dependencies.md"],
+        },
         # Substring matches (for combined / clearml augmented messages)
-        {"match": "substring", "key": "CUDA out of memory",
-         "paths": ["~/wiki/troubleshooting/gpu-memory.md"]},
-        {"match": "substring", "key": "DataLoader",
-         "paths": ["~/wiki/troubleshooting/data-loader.md"]},
+        {
+            "match": "substring",
+            "key": "CUDA out of memory",
+            "paths": ["~/wiki/troubleshooting/gpu-memory.md"],
+        },
+        {
+            "match": "substring",
+            "key": "DataLoader",
+            "paths": ["~/wiki/troubleshooting/data-loader.md"],
+        },
         # Signal- or content-based — matched via _CLASSIFY_EXC fallback
     ]
 
@@ -428,7 +449,7 @@ class RepairStage:
     @staticmethod
     def _word_in(combined: str, word: str) -> bool:
         """Case-insensitive whole-word match (\\b boundaries)."""
-        return bool(_re.search(r'\b' + _re.escape(word) + r'\b', combined))
+        return bool(_re.search(r"\b" + _re.escape(word) + r"\b", combined))
 
     @staticmethod
     def _CLASSIFY_EXC(exc_type: str, exc_message: str = "") -> list[str]:  # noqa: N802
@@ -445,37 +466,46 @@ class RepairStage:
         if any(excl in type_only for excl in _EXCLUDED_TYPES):
             return []
 
-        if (RepairStage._word_in(combined, "cuda")
-                or RepairStage._word_in(combined, "out of memory")
-                or RepairStage._word_in(combined, "oom")):
+        if (
+            RepairStage._word_in(combined, "cuda")
+            or RepairStage._word_in(combined, "out of memory")
+            or RepairStage._word_in(combined, "oom")
+        ):
             return ["~/wiki/troubleshooting/gpu-memory.md"]
-        if (RepairStage._word_in(combined, "killed")
-                or RepairStage._word_in(combined, "sigkill")
-                or RepairStage._word_in(combined, "sigterm")
-                or RepairStage._word_in(combined, "sigabrt")
-                or RepairStage._word_in(combined, "sigsegv")
-                or RepairStage._word_in(combined, "signal 11")
-                or RepairStage._word_in(combined, "signal 6")
-                or RepairStage._word_in(combined, "signal 15")):
+        if (
+            RepairStage._word_in(combined, "killed")
+            or RepairStage._word_in(combined, "sigkill")
+            or RepairStage._word_in(combined, "sigterm")
+            or RepairStage._word_in(combined, "sigabrt")
+            or RepairStage._word_in(combined, "sigsegv")
+            or RepairStage._word_in(combined, "signal 11")
+            or RepairStage._word_in(combined, "signal 6")
+            or RepairStage._word_in(combined, "signal 15")
+        ):
             return ["~/wiki/troubleshooting/oom-killer.md"]
-        if (RepairStage._word_in(combined, "bus error")
-                or RepairStage._word_in(combined, "shm")
-                or RepairStage._word_in(combined, "/dev/shm")):
+        if (
+            RepairStage._word_in(combined, "bus error")
+            or RepairStage._word_in(combined, "shm")
+            or RepairStage._word_in(combined, "/dev/shm")
+        ):
             return ["~/wiki/troubleshooting/shared-memory.md"]
-        if (RepairStage._word_in(combined, "no space")
-                or RepairStage._word_in(combined, "disk quota")
-                or RepairStage._word_in(combined, "disk full")
-                or RepairStage._word_in(combined, "storage exhausted")):
+        if (
+            RepairStage._word_in(combined, "no space")
+            or RepairStage._word_in(combined, "disk quota")
+            or RepairStage._word_in(combined, "disk full")
+            or RepairStage._word_in(combined, "storage exhausted")
+        ):
             return ["~/wiki/troubleshooting/disk-space.md"]
-        if (RepairStage._word_in(combined, "timeout")
-                or RepairStage._word_in(combined, "time out")
-                or RepairStage._word_in(combined, "deadline")):
+        if (
+            RepairStage._word_in(combined, "timeout")
+            or RepairStage._word_in(combined, "time out")
+            or RepairStage._word_in(combined, "deadline")
+        ):
             return ["~/wiki/troubleshooting/timeouts.md"]
         return []
 
     @staticmethod
-    def _signal_to_wiki(exit_code: int, sig_name: str,
-                       exc_message: str = "") -> dict[str, Any]:
+    def _signal_to_wiki(exit_code: int, sig_name: str, exc_message: str = "") -> dict[str, Any]:
         """Map signal exit codes to specific troubleshooting wiki pages.
 
         137 (SIGKILL) → oom-killer.md
@@ -550,17 +580,28 @@ class RepairStage:
             "attempts": len(self._repair_history),
             "history": list(self._repair_history),
             "exit_code_category": _exit_code_category(getattr(self, "_last_exit_code", 1)),
-            "error": None if self._fixed else (
-                detail.get("action", "Repair attempted but unsuccessful")
-            ),
+            "error": None
+            if self._fixed
+            else (detail.get("action", "Repair attempted but unsuccessful")),
         }
         # For L2 results, propagate structured context to top level
         # so Hermes doesn't need to dig into history[]
         if level == "L2":
-            for key in ("exc_type", "exc_message", "files_to_check",
-                       "wiki_paths", "wiki_source", "tb_snippet", "subagent_prompt",
-                       "subagent_schema", "exit_code", "experiment_id",
-                       "context_length", "input_valid", "fix_params"):
+            for key in (
+                "exc_type",
+                "exc_message",
+                "files_to_check",
+                "wiki_paths",
+                "wiki_source",
+                "tb_snippet",
+                "subagent_prompt",
+                "subagent_schema",
+                "exit_code",
+                "experiment_id",
+                "context_length",
+                "input_valid",
+                "fix_params",
+            ):
                 if key in detail:
                     result[key] = detail[key]
         else:

@@ -86,6 +86,7 @@ class ExperimentPipeline:
         execution_queue: str | None = None,
         abort_on_failure: bool | None = None,
         timeout: float | None = None,
+        step_time_limit: float | None = None,
         skip_steps: list[str] | None = None,
     ) -> dict[str, Any]:
         """Mode B (fast): Create and run a train → eval pipeline.
@@ -104,6 +105,7 @@ class ExperimentPipeline:
             execution_queue: Queue for step execution (default: self.queue).
             abort_on_failure: Override instance-level abort_on_failure.
             timeout: Max minutes to wait for pipeline completion.
+            step_time_limit: Max minutes per step (clearml server kills overdue tasks).
             skip_steps: List of step names to skip, e.g. ["eval"].
 
         Returns:
@@ -156,6 +158,7 @@ class ExperimentPipeline:
                 base_task_project=self.project,
                 parameter_override=train_override if train_override else None,
                 execution_queue=exec_queue,
+                time_limit=step_time_limit,
             )
             steps.append(add_train_result)
 
@@ -177,6 +180,7 @@ class ExperimentPipeline:
                 parents=["train"] if "train" not in skip else None,
                 parameter_override=eval_override if eval_override else None,
                 execution_queue=exec_queue,
+                time_limit=step_time_limit,
             )
             steps.append(add_eval_result)
 
@@ -225,6 +229,7 @@ class ExperimentPipeline:
         version: str | None = None,
         execution_queue: str | None = None,
         timeout: float | None = None,
+        step_time_limit: float | None = None,
         pruner: str = "hyperband",
         skip_steps: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -311,6 +316,7 @@ class ExperimentPipeline:
                 base_task_project=self.project,
                 parameter_override=hpo_params_override,
                 execution_queue=exec_queue,
+                time_limit=step_time_limit,
             )
             steps.append(add_hpo_result)
 
@@ -328,6 +334,7 @@ class ExperimentPipeline:
                 # via clearml pipeline variable syntax
                 parameter_override={} if train_parents else None,
                 execution_queue=exec_queue,
+                time_limit=step_time_limit,
             )
             steps.append(add_train_result)
 
@@ -355,6 +362,7 @@ class ExperimentPipeline:
                 parents=eval_parents if eval_parents else None,
                 parameter_override=eval_override if eval_override else None,
                 execution_queue=exec_queue,
+                time_limit=step_time_limit,
             )
             steps.append(add_eval_result)
 

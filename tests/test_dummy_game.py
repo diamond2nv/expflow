@@ -111,6 +111,7 @@ class TestDummyGameFailures:
         assert result["status"] == "failed"
         # This failure should be fixable by L0
         from expflow_pde.repair import RepairStage
+
         stage = RepairStage()
         repair = stage.run(task_log=result["task_log"], exit_code=128)
         assert repair["level"] == "L0"
@@ -122,6 +123,7 @@ class TestDummyGameFailures:
         result = game.step(inject_failure="cuda_oom")
         assert result["status"] == "failed"
         from expflow_pde.repair import RepairStage
+
         stage = RepairStage()
         repair = stage.run(task_log=result["task_log"], exit_code=1)
         assert repair["level"] == "L1"
@@ -134,6 +136,7 @@ class TestDummyGameFailures:
         result = game.step(inject_failure="unknown_error")
         assert result["status"] == "failed"
         from expflow_pde.repair import RepairStage
+
         stage = RepairStage()
         repair = stage.run(task_log=result["task_log"], exit_code=1)
         # Falls through L0, L1 captures it
@@ -154,6 +157,7 @@ class TestDummyGameCeiling:
                 continue
         seg = game._current_seg
         from expflow_pde.dummy.game import _CEILING
+
         ceil = _CEILING["task1"]
         assert seg["seg1"] <= ceil["seg1"]
         assert seg["seg2"] <= ceil["seg2"]
@@ -203,7 +207,6 @@ class TestDummyGameWithDiagnose:
         game = DummyExperimentGame(task_id="task1", db_path=db_path, seed=42)
         game.start()
 
-
         # Push towards ceiling
         for _ in range(10):
             result = game.step(suggested_params={"n_modes": 24, "width": 64}, inject_failure="none")
@@ -214,6 +217,7 @@ class TestDummyGameWithDiagnose:
         # After enough steps, seg approaches ceiling
         seg = game._current_seg
         from expflow_pde.dummy.game import _CEILING
+
         ceil = _CEILING["task1"]
         # All should be fairly close to ceiling after 10 steps + params
         assert seg["seg1"] >= ceil["seg1"] * 0.7 or seg["seg2"] >= ceil["seg2"] * 0.7

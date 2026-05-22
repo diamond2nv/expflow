@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """expflow hypothesis CLI — record and track experiment hypotheses."""
 
-import typer
 from typing import Optional
+
+import typer
 
 hypothesis_app = typer.Typer(
     name="hypothesis",
@@ -19,7 +20,9 @@ def get_hypothesis_app() -> typer.Typer:
 @hypothesis_app.command("list")
 def list_cmd(
     status: Optional[str] = typer.Option(
-        None, "--status", "-s",
+        None,
+        "--status",
+        "-s",
         help="Filter: proposed, accepted, rejected, inconclusive",
     ),
 ) -> None:
@@ -81,15 +84,21 @@ def show_cmd(
 def close_cmd(
     hypothesis_id: str = typer.Argument(..., help="Hypothesis ID"),
     status: str = typer.Option(
-        ..., "--status", "-s",
+        ...,
+        "--status",
+        "-s",
         help="Outcome: accepted, rejected, inconclusive",
     ),
     evidence: str = typer.Option(
-        ..., "--evidence", "-e",
+        ...,
+        "--evidence",
+        "-e",
         help="What the experiment showed",
     ),
     evidence_task_id: Optional[str] = typer.Option(
-        None, "--task", "-t",
+        None,
+        "--task",
+        "-t",
         help="clearml task ID with evidence",
     ),
 ) -> None:
@@ -112,15 +121,21 @@ def close_cmd(
 def record_cmd(
     hypothesis: str = typer.Argument(..., help="The hypothesis statement"),
     rationale: str = typer.Option(
-        ..., "--rationale", "-r",
+        ...,
+        "--rationale",
+        "-r",
         help="Why this hypothesis makes sense",
     ),
     suggested_param: Optional[list[str]] = typer.Option(
-        None, "--param", "-p",
+        None,
+        "--param",
+        "-p",
         help="Suggested params in key=val format (repeatable)",
     ),
     origin_task_id: Optional[str] = typer.Option(
-        None, "--origin", "-o",
+        None,
+        "--origin",
+        "-o",
         help="clearml task ID that inspired this",
     ),
 ) -> None:
@@ -141,7 +156,7 @@ def record_cmd(
         origin_task_id=origin_task_id,
     )
     print(f"  Recorded hypothesis: {result['id']}")
-    print(f"  Status: proposed")
+    print("  Status: proposed")
 
 
 @hypothesis_app.command("rejected")

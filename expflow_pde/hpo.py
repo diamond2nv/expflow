@@ -626,7 +626,9 @@ def _suggest_params(trial: Any, search_space: dict[str, dict[str, Any]]) -> dict
     return params
 
 
-def _run_trial_local(script: str, params: dict[str, Any], objective_metric: str, loss: str | None = None) -> float | None:
+def _run_trial_local(
+    script: str, params: dict[str, Any], objective_metric: str, loss: str | None = None
+) -> float | None:
     """Run a single trial locally."""
     cmd = [script]
     for k, v in params.items():

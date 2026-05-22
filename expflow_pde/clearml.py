@@ -20,11 +20,38 @@ def _get_task_module():
     return Task
 
 
-def _get_queue_module():
-    import clearml
-    from clearml import Queue  # noqa: F811
+# ── Backend API helpers for queues / workers ──
 
-    return clearml, Queue
+
+def _call_queue_service(action: str) -> dict[str, Any]:
+    """Call clearml backend queue service via SDK session.
+
+    Clearml 2.1.7+ removed the top-level ``Queue`` class — use the
+    backend API directly instead of ``from clearml import Queue``.
+    ``action`` is a PascalCase request name e.g. ``get_all`` → ``GetAllRequest``.
+    """
+    import importlib
+    from clearml import Task
+
+    svc = importlib.import_module("clearml.backend_api.services.v2_23.queues")
+    cls = getattr(svc, f"{action.title().replace('_', '')}Request", None)
+    if cls is None:
+        raise RuntimeError(f"clearml queue service has no '{action}' request")
+    res = Task._get_default_session().send(cls())
+    return (res.response_data or {}) if hasattr(res, 'response_data') else (res.get('data', {}))
+
+
+def _call_worker_service(action: str) -> dict[str, Any]:
+    """Call clearml backend worker service via SDK session."""
+    import importlib
+    from clearml import Task
+
+    svc = importlib.import_module("clearml.backend_api.services.v2_23.workers")
+    cls = getattr(svc, f"{action.title().replace('_', '')}Request", None)
+    if cls is None:
+        raise RuntimeError(f"clearml worker service has no '{action}' request")
+    res = Task._get_default_session().send(cls())
+    return (res.response_data or {}) if hasattr(res, 'response_data') else (res.get('data', {}))
 
 
 def _get_dataset_module():
@@ -266,28 +293,35 @@ def _import_worker_module() -> None:
 def list_queues() -> list[dict[str, Any]]:
     """List all available queues.
 
+    Uses clearml backend API directly (Queue class removed in 2.1.7+).
+
     Returns:
         List of queue dicts with id, name.
     """
-    _, queue_cls = _get_queue_module()  # noqa: N806
-    queues = queue_cls.get_queues()
-    return [_serialize_queue(q) for q in queues]
+    data = _call_queue_service("get_all")
+    queues_raw: list[dict[str, Any]] = data.get("queues", [])
+    return [{"id": q["id"], "name": q["name"]} for q in queues_raw]
 
 
 def get_queue_status(queue_name: str) -> dict[str, Any]:
     """Get detailed status of a specific queue.
 
-    Args:
-        queue_name: The queue name.
-
     Returns:
         Dict with queue id, name, entries (list of queued task IDs).
     """
-    _, queue_cls = _get_queue_module()  # noqa: N806
-    queue = queue_cls.get_queue(queue_name=queue_name)
-    result = _serialize_queue(queue)
-    result["entries"] = getattr(queue, "entries", [])
-    return result
+    data = _call_queue_service("get_all")
+    for q in data.get("queues", []):
+        if q.get("name") == queue_name:
+            entries_raw = q.get("entries", [])
+            entries = [
+                e.get("task", e.get("id", "")) for e in entries_raw
+            ] if entries_raw else []
+            return {
+                "id": q["id"],
+                "name": q["name"],
+                "entries": entries,
+            }
+    return {"error": f"Queue {queue_name!r} not found"}
 
 
 COMPLIANCE_METADATA_KEY = "expflow:compliance"

@@ -63,6 +63,9 @@ def submit_cmd(
     timeout: Optional[float] = typer.Option(
         None, "--timeout", help="Max wait time in minutes (None = no limit)"
     ),
+    step_time_limit: Optional[float] = typer.Option(
+        None, "--step-time-limit", help="Max minutes per step (clearml server kills overdue tasks)"
+    ),
     skip: Optional[list[str]] = typer.Option(
         None,
         "--skip",
@@ -136,8 +139,70 @@ def submit_cmd(
         version=version or None,
         execution_queue=queue,
         timeout=timeout if wait else None,
+        step_time_limit=step_time_limit,
         skip_steps=skip,
     )
+
+    # ── Post-submit: if --wait, poll for true completion ──
+    # `pipe.wait(timeout=X)` returns on timeout even if pipeline is still running.
+    # Use clearml task polling to check real status after wait returns.
+    if wait and result.get("pipeline_id"):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module, get_task
+
+            PipelineController = _get_pipeline_module()
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+            )
+            pid = result["pipeline_id"]
+            # Poll pipeline status up to 5 more minutes (60s intervals)
+            import time as _time
+
+            for _ in range(5):
+                _time.sleep(60)
+                task = get_task(pid)
+                if task:
+                    task_status = task.get("status", "")
+                    if task_status in ("completed", "failed", "stopped"):
+                        result["status"] = task_status
+                        break
+        except Exception:
+            pass  # polling is best-effort; fall through to initial status
+
+    # ── Post-submit: enrich result with eval task id ──
+    # Read eval step's clearml task from pipeline controller for direct scalar access
+    if eval_script and "eval" not in (skip or []):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module
+
+            PipelineController = _get_pipeline_module()  # noqa: N806
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+                version=version or "0.1.0",
+            )
+            eval_step = pipe.get_step("eval")
+            result["eval_task_id"] = eval_step.id if hasattr(eval_step, "id") else ""
+        except Exception:
+            result["eval_task_id"] = ""
+
+    # ── Post-submit: write to DispatchDB for StagnationDetector ──
+    if json_output and wait:
+        try:
+            from expflow_pde.dispatch_db import DispatchDB
+
+            db = DispatchDB()
+            db.register_experiment(
+                script=f"pipeline submit {train_script}",
+                args={"train_script": train_script, "eval_script": eval_script, "params": train_params},
+                queue=queue,
+                project=project,
+                source="pipeline_cli",
+                result_summary=result,
+            )
+        except Exception:
+            pass  # non-critical; DispatchDB may not exist
 
     if json_output:
         import json
@@ -174,6 +239,9 @@ def submit_full_cmd(
     ),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for pipeline completion"),
     timeout: Optional[float] = typer.Option(None, "--timeout", help="Max wait in minutes"),
+    step_time_limit: Optional[float] = typer.Option(
+        None, "--step-time-limit", help="Max minutes per step (clearml server kills overdue tasks)"
+    ),
     skip: Optional[list[str]] = typer.Option(
         None,
         "--skip",
@@ -239,8 +307,65 @@ def submit_full_cmd(
         pipeline_name=pipeline_name,
         execution_queue=queue,
         timeout=timeout if wait else None,
+        step_time_limit=step_time_limit,
         skip_steps=skip,
     )
+
+    # ── Post-submit: if --wait, poll for true completion ──
+    if wait and result.get("pipeline_id"):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module, get_task
+
+            PipelineController = _get_pipeline_module()
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+            )
+            pid = result["pipeline_id"]
+            import time as _time
+
+            for _ in range(5):
+                _time.sleep(60)
+                task = get_task(pid)
+                if task:
+                    task_status = task.get("status", "")
+                    if task_status in ("completed", "failed", "stopped"):
+                        result["status"] = task_status
+                        break
+        except Exception:
+            pass
+
+    # ── Post-submit: enrich with eval task id ──
+    if eval_script and "eval" not in (skip or []):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module
+
+            PipelineController = _get_pipeline_module()
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+            )
+            eval_step = pipe.get_step("eval")
+            result["eval_task_id"] = eval_step.id if hasattr(eval_step, "id") else ""
+        except Exception:
+            result["eval_task_id"] = ""
+
+    # ── Post-submit: write to DispatchDB ──
+    if json_output and wait:
+        try:
+            from expflow_pde.dispatch_db import DispatchDB
+
+            db = DispatchDB()
+            db.register_experiment(
+                script=f"pipeline submit-full {train_script}",
+                args={"train_script": train_script, "eval_script": eval_script, "trials": trials},
+                queue=queue,
+                project=project,
+                source="pipeline_cli",
+                result_summary=result,
+            )
+        except Exception:
+            pass
 
     if json_output:
         import json

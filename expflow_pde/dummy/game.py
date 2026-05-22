@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import random
 from typing import Any
 
 from expflow_pde.dispatch_db import DispatchDB
-
 
 # ── Baseline seg scores per task ──
 
@@ -50,13 +48,13 @@ _CEILING: dict[str, dict[str, float]] = {
 # ── Effect of each hyperparam change on seg scores (additive) ──
 
 _FIX_EFFECTS: dict[str, dict[str, float]] = {
-    "n_modes":       {"seg1": 0.0, "seg2": 3.0, "seg3": 8.0},   # +modes helps high freq
-    "width":         {"seg1": 0.0, "seg2": 2.0, "seg3": 4.0},
+    "n_modes": {"seg1": 0.0, "seg2": 3.0, "seg3": 8.0},  # +modes helps high freq
+    "width": {"seg1": 0.0, "seg2": 2.0, "seg3": 4.0},
     "num_sub_steps": {"seg1": 2.0, "seg2": 3.0, "seg3": 5.0},
-    "lr":            {"seg1": 5.0, "seg2": -2.0, "seg3": -1.0},  # high LR helps short, hurts long
+    "lr": {"seg1": 5.0, "seg2": -2.0, "seg3": -1.0},  # high LR helps short, hurts long
     "stability_lambda": {"seg1": -1.0, "seg2": 6.0, "seg3": 0.0},  # stability helps mid
-    "weight_decay":  {"seg1": 0.0, "seg2": 1.0, "seg3": 3.0},
-    "epochs":        {"seg1": 1.0, "seg2": 1.0, "seg3": 2.0},
+    "weight_decay": {"seg1": 0.0, "seg2": 1.0, "seg3": 3.0},
+    "epochs": {"seg1": 1.0, "seg2": 1.0, "seg3": 2.0},
 }
 
 # ── Failure injection patterns ──
@@ -123,7 +121,7 @@ _FAILURE_TEMPLATES: dict[str, tuple[str, int, str]] = {
     # T4: ImportError prefix (not substring "git")
     "import_error": (
         "Traceback (most recent call last):\n"
-        "  File \"/opt/clearml.py\", line 42, in setup\n"
+        '  File "/opt/clearml.py", line 42, in setup\n'
         "    from clearml import Task\n"
         "ImportError: cannot import name 'Task' from 'clearml'\n",
         1,
@@ -174,13 +172,19 @@ class DummyExperimentGame:
         self._root_id = exp["experiment_id"]
         self._last_exp_id = self._root_id
 
-        self._db.update_status(self._root_id, "completed", result_summary=json.dumps({
-            "seg1": self._current_seg["seg1"],
-            "seg2": self._current_seg["seg2"],
-            "seg3": self._current_seg["seg3"],
-            "total": self._total(),
-            "task_id": self.task_id,
-        }))
+        self._db.update_status(
+            self._root_id,
+            "completed",
+            result_summary=json.dumps(
+                {
+                    "seg1": self._current_seg["seg1"],
+                    "seg2": self._current_seg["seg2"],
+                    "seg3": self._current_seg["seg3"],
+                    "total": self._total(),
+                    "task_id": self.task_id,
+                }
+            ),
+        )
 
         return {
             "game": "started",
@@ -246,13 +250,15 @@ class DummyExperimentGame:
             task_log = inject_task_log or self._build_log(total)
             exit_code = 0
             status = "completed"
-            result_summary = json.dumps({
-                "seg1": self._current_seg["seg1"],
-                "seg2": self._current_seg["seg2"],
-                "seg3": self._current_seg["seg3"],
-                "total": total,
-                "task_id": self.task_id,
-            })
+            result_summary = json.dumps(
+                {
+                    "seg1": self._current_seg["seg1"],
+                    "seg2": self._current_seg["seg2"],
+                    "seg3": self._current_seg["seg3"],
+                    "total": total,
+                    "task_id": self.task_id,
+                }
+            )
 
         # Create child experiment
         parent_id = self._last_exp_id
@@ -335,9 +341,9 @@ class DummyExperimentGame:
     # ── Internal helpers ──
 
     def _total(self) -> float:
-        return round(self._current_seg["seg1"] +
-                     self._current_seg["seg2"] +
-                     self._current_seg["seg3"], 1)
+        return round(
+            self._current_seg["seg1"] + self._current_seg["seg2"] + self._current_seg["seg3"], 1
+        )
 
     def _steps_to_ceiling(self) -> int:
         """Estimate remaining steps before all segs hit ceiling."""
@@ -351,9 +357,7 @@ class DummyExperimentGame:
         # Rough: each step gains ~5 points on average
         return int(math.ceil(remaining / 5.0))
 
-    def _pick_failure(
-        self, explicit: str | None = None
-    ) -> tuple[str, int, str] | None:
+    def _pick_failure(self, explicit: str | None = None) -> tuple[str, int, str] | None:
         """Pick a failure pattern. Returns None = success.
 
         Explicit = force a specific failure. 'none' = force success.
@@ -374,8 +378,4 @@ class DummyExperimentGame:
         return None
 
     def _build_log(self, total: float) -> str:
-        return (
-            f"Dummy experiment completed.\n"
-            f"Seg total: {total:.1f}\n"
-            f"Task: {self.task_id}\n"
-        )
+        return f"Dummy experiment completed.\nSeg total: {total:.1f}\nTask: {self.task_id}\n"

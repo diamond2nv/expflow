@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-
 # ── Fixtures ──
 
 
@@ -101,7 +100,10 @@ def test_suggest_long_term_collapse():
 
     diagnosis = {
         "degradation_pattern": "long_term",
-        "seg1": 85.3, "seg2": 55.1, "seg3": 22.7, "total": 46.4,
+        "seg1": 85.3,
+        "seg2": 55.1,
+        "seg3": 22.7,
+        "total": 46.4,
     }
     hp = {"n_modes": 12, "hidden_channels": 20, "lr": 0.001}
     result = suggest_next_params(diagnosis, current_hparams=hp)
@@ -117,7 +119,10 @@ def test_suggest_already_has_wd():
 
     diagnosis = {
         "degradation_pattern": "long_term",
-        "seg1": 85.0, "seg2": 50.0, "seg3": 20.0, "total": 40.0,
+        "seg1": 85.0,
+        "seg2": 50.0,
+        "seg3": 20.0,
+        "total": 40.0,
     }
     hp = {"n_modes": 12, "weight_decay": 1e-5}
     result = suggest_next_params(diagnosis, current_hparams=hp)
@@ -130,7 +135,10 @@ def test_suggest_mid_term():
 
     diagnosis = {
         "degradation_pattern": "mid_term",
-        "seg1": 87.0, "seg2": 45.0, "seg3": 38.0, "total": 54.0,
+        "seg1": 87.0,
+        "seg2": 45.0,
+        "seg3": 38.0,
+        "total": 54.0,
     }
     result = suggest_next_params(diagnosis, current_hparams={"lr": 0.001})
     assert result["suggested_params"].get("stability_lambda") == 0.001
@@ -142,7 +150,10 @@ def test_suggest_stable():
 
     diagnosis = {
         "degradation_pattern": "stable",
-        "seg1": 90, "seg2": 85, "seg3": 80, "total": 85,
+        "seg1": 90,
+        "seg2": 85,
+        "seg3": 80,
+        "total": 85,
     }
     result = suggest_next_params(diagnosis, current_hparams={})
     assert "hpo" in result["suggested_params"].get("tag", "")
@@ -154,7 +165,10 @@ def test_suggest_short_term():
 
     diagnosis = {
         "degradation_pattern": "short_term",
-        "seg1": 55.0, "seg2": 50.0, "seg3": 45.0, "total": 50.0,
+        "seg1": 55.0,
+        "seg2": 50.0,
+        "seg3": 45.0,
+        "total": 50.0,
     }
     result = suggest_next_params(diagnosis, current_hparams={"lr": 0.001, "epochs": 80})
     assert result["suggested_params"]["lr"] == 0.002
@@ -165,8 +179,9 @@ def test_suggest_short_term():
 
 
 def test_diagnose_cli_json(sample_eval_json):
-    from expflow_pde.cli import app
     from typer.testing import CliRunner
+
+    from expflow_pde.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["analyze", "diagnose", "--json", sample_eval_json])
@@ -176,8 +191,9 @@ def test_diagnose_cli_json(sample_eval_json):
 
 
 def test_diagnose_cli_no_args():
-    from expflow_pde.cli import app
     from typer.testing import CliRunner
+
+    from expflow_pde.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["analyze", "diagnose"])
@@ -186,8 +202,9 @@ def test_diagnose_cli_no_args():
 
 
 def test_suggest_cli(sample_eval_json):
-    from expflow_pde.cli import app
     from typer.testing import CliRunner
+
+    from expflow_pde.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["analyze", "suggest", "--json", sample_eval_json])

@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """Tests for expflow_pde.repair_rules — L0 deterministic fix suggestions."""
 
-
 from expflow_pde.repair_rules import (
     GitProjectNotFoundRule,
     ModuleNotFoundRule,

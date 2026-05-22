@@ -30,15 +30,16 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 try:
     import requests
+
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
-    import urllib.request
     import urllib.error
+    import urllib.request
 
 # ─── Logging ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -76,11 +77,13 @@ def _load_env(env_path: Optional[str] = None) -> None:
     paths_to_try = []
     if env_path:
         paths_to_try.append(Path(env_path))
-    paths_to_try.extend([
-        Path.home() / ".hermes" / ".env",
-        Path.home() / ".env",
-        Path.cwd() / ".env",
-    ])
+    paths_to_try.extend(
+        [
+            Path.home() / ".hermes" / ".env",
+            Path.home() / ".env",
+            Path.cwd() / ".env",
+        ]
+    )
 
     for p in paths_to_try:
         if p.exists():
@@ -105,9 +108,7 @@ _load_env()
 
 APP_ID = os.getenv("QQ_APP_ID", "")
 CLIENT_SECRET = os.getenv("QQ_CLIENT_SECRET", "")
-HOME_CHANNEL = (
-    os.getenv("QQBOT_HOME_CHANNEL") or os.getenv("QQ_HOME_CHANNEL", "")
-)
+HOME_CHANNEL = os.getenv("QQBOT_HOME_CHANNEL") or os.getenv("QQ_HOME_CHANNEL", "")
 
 TEXT_TYPE = 0
 MARKDOWN_TYPE = 2
@@ -185,7 +186,8 @@ def _api_call(
             if REQUESTS_AVAILABLE:
                 fn = requests.get if method == "GET" else requests.post
                 resp = fn(
-                    url, headers=headers,
+                    url,
+                    headers=headers,
                     json=payload if method == "POST" else None,
                     timeout=60,
                 )
@@ -193,9 +195,7 @@ def _api_call(
                 return resp.json()
             else:
                 body = json.dumps(payload).encode("utf-8") if payload else None
-                req = urllib.request.Request(
-                    url, data=body, headers=headers, method=method
-                )
+                req = urllib.request.Request(url, data=body, headers=headers, method=method)
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
@@ -240,10 +240,7 @@ def send_to_qq(
     if not APP_ID or not CLIENT_SECRET:
         return {
             "success": False,
-            "error": (
-                "QQ_APP_ID and QQ_CLIENT_SECRET not configured. "
-                "Set them in ~/.hermes/.env."
-            ),
+            "error": ("QQ_APP_ID and QQ_CLIENT_SECRET not configured. Set them in ~/.hermes/.env."),
         }
     if not target:
         return {
@@ -282,21 +279,22 @@ def main() -> int:
     """CLI entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="QQ Bot message sender (REST API, no LLM)"
-    )
+    parser = argparse.ArgumentParser(description="QQ Bot message sender (REST API, no LLM)")
     parser.add_argument("message", nargs="?", help="Message text")
     parser.add_argument("--file", "-f", help="Read message from file")
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Verify configuration without sending",
     )
     parser.add_argument(
-        "--test-token", action="store_true",
+        "--test-token",
+        action="store_true",
         help="Test token acquisition only",
     )
     parser.add_argument(
-        "--md", action="store_true",
+        "--md",
+        action="store_true",
         help="Send as Markdown",
     )
     parser.add_argument("--openid", help="Target user OpenID")

@@ -65,7 +65,8 @@ class LprelLoss(nn.Module):
         num_examples = x.size(0)
         diff_norms = torch.norm(
             x.reshape(num_examples, -1) - y.reshape(num_examples, -1),
-            p=self.p, dim=1,
+            p=self.p,
+            dim=1,
         )
         y_norms = torch.norm(y.reshape(num_examples, -1), p=self.p, dim=1)
         # Guard against division by zero
@@ -116,7 +117,9 @@ class lpLoss(nn.Module):
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         diff_norms = torch.norm(
-            (x - y).reshape(x.size(0), -1), p=self.p, dim=1,
+            (x - y).reshape(x.size(0), -1),
+            p=self.p,
+            dim=1,
         )
         if self.size_mean is True:
             return diff_norms.mean()
@@ -224,7 +227,9 @@ class H1relLoss_1D(nn.Module):
         """
         num_examples = x.size(0)
         diff_norms = torch.norm(
-            x.reshape(num_examples, -1) - y.reshape(num_examples, -1), p=2, dim=1,
+            x.reshape(num_examples, -1) - y.reshape(num_examples, -1),
+            p=2,
+            dim=1,
         )
         y_norms = torch.norm(y.reshape(num_examples, -1), p=2, dim=1)
         y_norms = torch.where(y_norms < 1e-7, torch.full_like(y_norms, 1e-7), y_norms)
@@ -243,17 +248,20 @@ class H1relLoss_1D(nn.Module):
         n_x, out_dim = x.size(1), x.size(-1)
 
         # Build frequency grid
-        k_x = torch.cat([
-            torch.arange(start=0, end=n_x // 2, step=1),
-            torch.arange(start=-n_x // 2, end=0, step=1),
-        ], dim=0).to(x.device)
+        k_x = torch.cat(
+            [
+                torch.arange(start=0, end=n_x // 2, step=1),
+                torch.arange(start=-n_x // 2, end=0, step=1),
+            ],
+            dim=0,
+        ).to(x.device)
         k_x = torch.abs(k_x).float().reshape(1, n_x, 1)  # (1, n_x, 1)
 
         acc = 0.0
         for i in range(out_dim):
             x_f = torch.fft.fftn(x[..., [i]], dim=[1])  # (N, n_x, 1)
             y_f = torch.fft.fftn(y[..., [i]], dim=[1])
-            weight = self.alpha * 1.0 + self.beta * (k_x ** 2)  # (1, n_x, 1)
+            weight = self.alpha * 1.0 + self.beta * (k_x**2)  # (1, n_x, 1)
             acc += self._rel(x_f * torch.sqrt(weight), y_f * torch.sqrt(weight))
 
         loss = acc / out_dim
@@ -294,7 +302,9 @@ class H1relLoss(nn.Module):
         """
         num_examples = x.size(0)
         diff_norms = torch.norm(
-            x.reshape(num_examples, -1) - y.reshape(num_examples, -1), p=2, dim=1,
+            x.reshape(num_examples, -1) - y.reshape(num_examples, -1),
+            p=2,
+            dim=1,
         )
         y_norms = torch.norm(y.reshape(num_examples, -1), p=2, dim=1)
         y_norms = torch.where(y_norms < 1e-7, torch.full_like(y_norms, 1e-7), y_norms)
@@ -313,18 +323,32 @@ class H1relLoss(nn.Module):
         n_x, n_y, out_dim = x.size(1), x.size(2), x.size(-1)
 
         # Build 2D frequency grid
-        k_x = torch.cat([
-            torch.arange(start=0, end=n_x // 2, step=1),
-            torch.arange(start=-n_x // 2, end=0, step=1),
-        ], dim=0).reshape(1, n_x, 1, 1).to(x.device)
-        k_y = torch.cat([
-            torch.arange(start=0, end=n_y // 2, step=1),
-            torch.arange(start=-n_y // 2, end=0, step=1),
-        ], dim=0).reshape(1, 1, n_y, 1).to(x.device)
+        k_x = (
+            torch.cat(
+                [
+                    torch.arange(start=0, end=n_x // 2, step=1),
+                    torch.arange(start=-n_x // 2, end=0, step=1),
+                ],
+                dim=0,
+            )
+            .reshape(1, n_x, 1, 1)
+            .to(x.device)
+        )
+        k_y = (
+            torch.cat(
+                [
+                    torch.arange(start=0, end=n_y // 2, step=1),
+                    torch.arange(start=-n_y // 2, end=0, step=1),
+                ],
+                dim=0,
+            )
+            .reshape(1, 1, n_y, 1)
+            .to(x.device)
+        )
         k_x = torch.abs(k_x).float()
         k_y = torch.abs(k_y).float()
 
-        weight = self.alpha * 1.0 + self.beta * (k_x ** 2 + k_y ** 2)  # (1, n_x, n_y, 1)
+        weight = self.alpha * 1.0 + self.beta * (k_x**2 + k_y**2)  # (1, n_x, n_y, 1)
 
         acc = 0.0
         for i in range(out_dim):
@@ -376,9 +400,7 @@ def loss_selector(
     }
 
     if name not in registry:
-        raise ValueError(
-            f"Unknown loss '{name}'. Options: {list(registry.keys())}"
-        )
+        raise ValueError(f"Unknown loss '{name}'. Options: {list(registry.keys())}")
 
     cls = registry[name]
 

@@ -174,11 +174,7 @@ class HypothesisRegistry:
         that have already been proven ineffective.
         """
         hyps = _load_hypotheses()
-        return [
-            h
-            for h in hyps
-            if h.get("status") == "rejected"
-        ]
+        return [h for h in hyps if h.get("status") == "rejected"]
 
     @staticmethod
     def get_open_hypotheses() -> list[dict[str, Any]]:

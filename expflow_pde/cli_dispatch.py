@@ -213,4 +213,4 @@ def _fmt_size(bytes_: int) -> str:
         return f"{bytes_} B"
     if bytes_ < 1024**2:
         return f"{bytes_ / 1024:.1f} KB"
-    return f"{bytes_ / (1024 ** 2):.1f} MB"
+    return f"{bytes_ / (1024**2):.1f} MB"
