@@ -402,6 +402,8 @@ class RepairStage:
                 "goal": "Analyze experiment failure and produce a fix plan",
                 "role": "leaf",
                 "toolsets": ["terminal", "file", "skills"],
+                # Dynamic context — all keys are English lower_snake_case
+                "suggested_params": {},
             },
         }
 

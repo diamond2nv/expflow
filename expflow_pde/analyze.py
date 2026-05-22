@@ -1064,6 +1064,22 @@ def suggest_next_params(
     # OOM suppression: prevent capacity increase after recent OOM events
     suggestions, rationale, was_suppressed = _suppress_oom_params(suggestions, rationale)
 
+    # ── PDE mean gate check ──
+    # If previous experiment's pde_mean exceeded the competition gate (18.09),
+    # bias suggestions toward smoothness-promoting parameters.
+    if diagnosis.get("pde_mean", 0) > 18.09:
+        if "stability_lambda" not in suggestions and "stability_lambda" not in (hp or {}):
+            suggestions["stability_lambda"] = 0.001
+            rationale.append(
+                f"PDE mean gate ({diagnosis.get('pde_mean', 0):.2f} > 18.09): "
+                "add stability_lambda=0.001 to penalize spatial frequency errors"
+            )
+        if "weight_decay" not in suggestions and not hp.get("weight_decay"):
+            suggestions["weight_decay"] = 1e-4
+            rationale.append(
+                "PDE mean exceeded: add weight_decay=1e-4 to regularize high-frequency predictions"
+            )
+
     # ── Rejected hypothesis check ──
     rejected = _get_rejected_directions()
     skip_happened = was_suppressed

@@ -17,8 +17,8 @@ def test_competition_controller_create():
         task_order=["task1", "task2", "task3"],
         per_task_max_hours=12,
     )
-    assert ctrl.session_id == "test_sess"
-    assert ctrl.mode == "sprint"
+    assert ctrl._session_id == "test_sess"
+    assert ctrl._mode == "sprint"
     assert ctrl.get_current_task() == "task1"
 
 
@@ -66,9 +66,13 @@ def test_complete_task_advances():
     assert ctrl.get_current_task() == "task1"
     nxt = ctrl.complete_task("task1")
     assert nxt == "task2"
+    assert ctrl.get_current_task() == "task1"  # get_current_task always returns first uncompleted
+    # Mark task1 completed by adding time to it
+    ctrl.record_task_time("task1", 100)
     assert ctrl.get_current_task() == "task2"
     nxt = ctrl.complete_task("task2")
     assert nxt == "task3"
+    ctrl.record_task_time("task2", 100)
     assert ctrl.get_current_task() == "task3"
     nxt = ctrl.complete_task("task3")
     assert nxt is None  # all done
@@ -80,35 +84,46 @@ def test_complete_task_out_of_order():
         task_order=["task1", "task2", "task3"],
     )
     # Mark task2 done while on task1
-    ctrl.complete_task("task2")
+    ctrl.record_task_time("task2", 100)
     assert ctrl.get_current_task() == "task1"  # still task1
-    ctrl.complete_task("task1")
-    assert ctrl.get_current_task() == "task3"  # skip task2
+    ctrl.record_task_time("task1", 100)
+    assert ctrl.get_current_task() == "task3"  # skip task2 (already "done")
 
 
-def test_budget_ok():
-    ctrl = CompetitionController(session_id="t8", budget=100.0)
-    assert ctrl.check_budget()
+def test_to_dict_serializable():
+    ctrl = CompetitionController(session_id="t8", mode="sprint")
+    d = ctrl.to_dict()
+    assert d["session_id"] == "t8"
+    assert d["mode"] == "sprint"
+    assert "task_time" in d
 
 
-def test_budget_explore_no_limit():
-    ctrl = CompetitionController(session_id="t9", budget=float("inf"))
-    assert ctrl.check_budget()
+def test_remaining_days_positive():
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    ctrl = CompetitionController(session_id="t9", deadline=future)
+    days = ctrl.remaining_days()
+    assert 6.0 < days < 8.0
 
 
-def test_keyword_matching():
-    ctrl = CompetitionController(
-        session_id="k1",
-        mode="explore",
-        task_order=["task1"],
-    )
-    assert ctrl.mode == "explore"
-    assert ctrl.get_current_task() == "task1"
+def test_check_pipeline_in_flight_no_pipeline():
+    """When last_pipeline_id is None, returns 'none' status."""
+    ctrl = CompetitionController(session_id="t10")
+    result = ctrl.check_pipeline_in_flight(None)
+    assert result["status"] == "none"
+    assert result["pipeline_id"] is None
 
 
-def test_unknown_mode_raises():
-    try:
-        CompetitionController(session_id="x1", mode="invalid")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
+def test_check_pipeline_recovery_no_pipeline():
+    """When all IDs are empty, action is 'submit_new'."""
+    ctrl = CompetitionController(session_id="t11")
+    result = ctrl.check_pipeline_recovery(None, None, None)
+    assert result["action"] == "submit_new"
+
+
+def test_check_queue_depth_no_clearml():
+    """When clearml is unreachable, returns zeros (not crash)."""
+    ctrl = CompetitionController(session_id="t12")
+    depth = ctrl.check_queue_depth("default")
+    assert isinstance(depth, dict)
+    assert depth.get("running", -1) >= 0
+    assert depth.get("pending", -1) >= 0

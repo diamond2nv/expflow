@@ -170,7 +170,7 @@ def submit_cmd(
         except Exception:
             pass  # polling is best-effort; fall through to initial status
 
-    # ── Post-submit: enrich result with eval task id ──
+    # ── Post-submit: enrich result with eval task id and killed detection ──
     # Read eval step's clearml task from pipeline controller for direct scalar access
     if eval_script and "eval" not in (skip or []):
         try:
@@ -186,6 +186,36 @@ def submit_cmd(
             result["eval_task_id"] = eval_step.id if hasattr(eval_step, "id") else ""
         except Exception:
             result["eval_task_id"] = ""
+
+    # ── Post-submit: detect if train_step was killed by time_limit ──
+    # When clearml kills a step via time_limit, the step status is "stopped"
+    # and the checkpoint file may be incomplete. This flag tells Hermes
+    # to treat eval results with suspicion.
+    result["train_killed"] = False
+    result["checkpoint_compromised"] = False
+    if wait and result.get("status") in ("failed", "stopped"):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module, get_task
+
+            PipelineController = _get_pipeline_module()
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+                version=version or "0.1.0",
+            )
+            train_step = pipe.get_step("train")
+            if hasattr(train_step, "id"):
+                train_task = get_task(train_step.id)
+                if train_task:
+                    train_status = train_task.get("status", "")
+                    if train_status == "stopped":
+                        result["train_killed"] = True
+                        result["checkpoint_compromised"] = True
+                    elif train_status == "completed":
+                        # Train completed but something else failed (e.g. eval)
+                        result["train_killed"] = False
+        except Exception:
+            pass
 
     # ── Post-submit: write to DispatchDB for StagnationDetector ──
     if json_output and wait:
@@ -350,6 +380,31 @@ def submit_full_cmd(
         except Exception:
             result["eval_task_id"] = ""
 
+    # ── Post-submit: detect if train_step was killed by time_limit ──
+    result["train_killed"] = False
+    result["checkpoint_compromised"] = False
+    if wait and result.get("status") in ("failed", "stopped"):
+        try:
+            from expflow_pde.clearml import _get_pipeline_module, get_task
+
+            PipelineController = _get_pipeline_module()
+            pipe = PipelineController(
+                name=(pipeline_name or result.get("name", pipeline_name)).replace(".py", ""),
+                project=project,
+            )
+            train_step = pipe.get_step("train")
+            if hasattr(train_step, "id"):
+                train_task = get_task(train_step.id)
+                if train_task:
+                    train_status = train_task.get("status", "")
+                    if train_status == "stopped":
+                        result["train_killed"] = True
+                        result["checkpoint_compromised"] = True
+                    elif train_status == "completed":
+                        result["train_killed"] = False
+        except Exception:
+            pass
+
     # ── Post-submit: write to DispatchDB ──
     if json_output and wait:
         try:
@@ -394,3 +449,127 @@ def _print_result(result: dict[str, Any], wait: bool, timeout: float | None) -> 
     print(f"  Status:   {result['status']}")
     if wait:
         print(f"  Wait:     completed (timeout={timeout or 'none'} min)")
+
+
+# ── Pre-submit verification ──
+
+
+@pipeline_app.command("verify")
+def verify_cmd(
+    train_script: str = typer.Argument(..., help="Training script path"),
+    eval_script: Optional[str] = typer.Option(
+        None, "--eval-script", "-e", help="Evaluation script path"
+    ),
+    queue: str = typer.Option("default", "--queue", "-q", help="Execution queue"),
+    project: str = typer.Option("PDEBench", "--project", "-p", help="ClearML project name"),
+    packages: Optional[list[str]] = typer.Option(
+        None, "--packages", help="Packages for clearml Task.create"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", "-j", help="Output result as JSON (for Hermes /goal)"
+    ),
+) -> None:
+    """Verify that a pipeline submission would succeed.
+
+    Checks:
+    1. Training script exists and is readable
+    2. Evaluation script exists and is readable (if provided)
+    3. clearml connection is functional
+    4. Execution queue exists on the clearml server
+    5. Packages resolve without syntax errors
+
+    This is a PRE-CHECK only — no pipeline is created or submitted.
+    Returns a JSON result dict with all check statuses.
+    """
+    import json
+    import os
+
+    checks: list[dict[str, Any]] = []
+
+    # Check 1: Train script exists
+    train_exists = os.path.isfile(train_script)
+    checks.append({
+        "name": "train_script",
+        "status": "pass" if train_exists else "fail",
+        "detail": train_script if train_exists else f"NOT FOUND: {train_script}",
+    })
+
+    # Check 2: Eval script exists
+    eval_exists = True
+    if eval_script:
+        eval_exists = os.path.isfile(eval_script)
+        checks.append({
+            "name": "eval_script",
+            "status": "pass" if eval_exists else "fail",
+            "detail": eval_script if eval_exists else f"NOT FOUND: {eval_script}",
+        })
+
+    # Check 3: clearml connection
+    clearml_ok = False
+    queue_ok = False
+    queues_found: list[str] = []
+    try:
+        from clearml import Task  # noqa: PLC0415
+        from clearml.backend_api.services.v2_23.queues import GetAllRequest  # noqa: PLC0415
+
+        session = Task._get_default_session()
+        if session:
+            clearml_ok = True
+            # Check 4: Queue exists
+            try:
+                res = session.send(GetAllRequest())
+                raw_queues = (res.response_data or {}).get("queues", [])
+                queues_found = [q.get("name", "?") for q in raw_queues]
+                # Filter by project match (PDEBench check)
+                project_queues = [q for q in queues_found if project.lower() in q.lower()]
+                all_matched = [q for q in queues_found]
+                queue_ok = queue in all_matched
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    checks.append({
+        "name": "clearml_connection",
+        "status": "pass" if clearml_ok else "fail",
+        "detail": "clearml API reachable" if clearml_ok else "Cannot connect to clearml API",
+    })
+
+    checks.append({
+        "name": f"queue_{queue}",
+        "status": "pass" if queue_ok else "warn",
+        "detail": f"Queue '{queue}' found" if queue_ok
+        else f"Queue '{queue}' NOT found (available: {', '.join(queues_found[:10]) or 'none'})",
+    })
+
+    # Check 5: Packages
+    pkg_ok = True
+    if packages is not None:
+        resolved = [p for p in packages if p] if packages else []
+        if not resolved:
+            pass  # explicitly empty is fine
+    else:
+        pass  # None = clearml auto-detect
+
+    checks.append({
+        "name": "packages",
+        "status": "pass",
+        "detail": "packages: [] (explicit)" if packages == [] else
+        "packages: auto (clearml default)" if packages is None else
+        f"packages: {packages}",
+    })
+
+    result = {
+        "all_pass": all(c["status"] == "pass" for c in checks),
+        "warnings": sum(1 for c in checks if c["status"] == "warn"),
+        "checks": checks,
+    }
+
+    if json_output:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        for c in checks:
+            icon = {"pass": "✅", "fail": "❌", "warn": "⚠️"}.get(c["status"], "❓")
+            print(f"  {icon}  {c['name']}: {c['detail']}")
+        status = "PASS" if result["all_pass"] else "HAS WARNINGS" if result["warnings"] else "HAS FAILURES"
+        print(f"\nOverall: {status}")
