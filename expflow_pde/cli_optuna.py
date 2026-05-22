@@ -235,6 +235,11 @@ def hpo_run_cmd(
         help="Loss function name for training script (e.g., l2_rel, h1_1d). "
         "Passed as --loss=<name> to the training script.",
     ),
+    param_prefix: str = typer.Option(
+        "Args/--",
+        "--param-prefix",
+        help="Parameter prefix for clearml task. Args/-- for argparse, Args/ for clearml Args section",
+    ),
 ) -> None:
     """Run hyperparameter optimization on a script.
 
@@ -265,6 +270,7 @@ def hpo_run_cmd(
         pruner=pruner_val,
         use_hpo_optimizer=optimizer,
         loss=loss,
+        param_prefix=param_prefix,
     )
 
     if "error" in result:

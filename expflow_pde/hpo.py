@@ -210,6 +210,7 @@ def run_hpo(
     constraints: dict[str, Any] | None = None,
     failures: list[dict[str, Any]] | None = None,
     use_combined_score: bool = False,
+    param_prefix: str = "Args/--",
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -266,6 +267,7 @@ def run_hpo(
             project=project,
             loss=loss,
             use_combined_score=use_combined_score,
+            param_prefix=param_prefix,
         )
 
     if distributed:
@@ -283,6 +285,7 @@ def run_hpo(
             pruner=pruner,
             loss=loss,
             use_combined_score=use_combined_score,
+            param_prefix=param_prefix,
         )
 
     return _run_hpo_local(
@@ -386,6 +389,7 @@ def _run_hpo_distributed(
     pruner: str | None = "hyperband",
     loss: str | None = None,
     use_combined_score: bool = False,
+    param_prefix: str = "Args/--",
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode)."""
     from clearml import Task
@@ -443,9 +447,9 @@ def _run_hpo_distributed(
             parent=source_task,
         )
         for k, v in params.items():
-            trial_task.set_parameter(f"Args/--{k}", str(v))
+            trial_task.set_parameter(f"{param_prefix}{k}", str(v))
         if loss is not None:
-            trial_task.set_parameter("Args/--loss", loss)
+            trial_task.set_parameter(f"{param_prefix}loss", loss)
         trial_task.enqueue(queue)
         pending.append((trial, params, trial_task))
 
@@ -520,13 +524,28 @@ def _collect_one_trial(
     return None
 
 
+def _normalize_metric_name(name: str) -> str:
+    """Normalize metric name for fuzzy matching.
+
+    Strips case, spaces, underscores, and hyphens so that
+    'seg_total', 'Seg Total', 'seg-total', and 'SEGTOTAL' all match.
+    """
+    return name.lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
 def _extract_metric_from_task(task: Any, metric_name: str) -> float | None:
-    """Extract a metric value from a completed clearml task."""
+    """Extract a metric value from a completed clearml task.
+
+    Uses fuzzy matching on metric keys (case/space/underscore insensitive)
+    so that e.g. 'seg_total' matches 'Seg Total' reported by the training script.
+    """
     try:
         scalars = task.get_last_scalar_metrics()
+        norm_target = _normalize_metric_name(metric_name)
         for group, metrics in scalars.items():
-            if metric_name in metrics:
-                return float(metrics[metric_name]["last"])
+            for key, val in metrics.items():
+                if _normalize_metric_name(key) == norm_target:
+                    return float(val["last"])
     except Exception:
         pass
     return None
@@ -534,6 +553,9 @@ def _extract_metric_from_task(task: Any, metric_name: str) -> float | None:
 
 def _extract_combined_score(task: Any) -> float | None:
     """Extract combined_score(seg_total, train_minutes) from a clearml task.
+
+    Uses fuzzy metric name matching (case/space/underscore insensitive)
+    so 'seg_total' matches 'Seg Total' reported by the training script.
 
     Requires the training script to report both:
         Task.report_scalar("Score", "seg_total", value)
@@ -544,10 +566,12 @@ def _extract_combined_score(task: Any) -> float | None:
         seg = None
         time_min = None
         for group, metrics in scalars.items():
-            if "seg_total" in metrics:
-                seg = float(metrics["seg_total"]["last"])
-            if "train_time_minutes" in metrics:
-                time_min = float(metrics["train_time_minutes"]["last"])
+            for key, val in metrics.items():
+                norm = _normalize_metric_name(key)
+                if norm == "segtotal" or norm == "segmenttotal":
+                    seg = float(val["last"])
+                if norm == "traintimeminutes":
+                    time_min = float(val["last"])
         if seg is not None and time_min is not None:
             return combined_score(seg, time_min)
         return seg  # fallback to seg_total only
@@ -571,14 +595,14 @@ def _run_hpo_optimizer(
     project: str,
     loss: str | None = None,
     use_combined_score: bool = False,
+    param_prefix: str = "Args/--",
 ) -> dict[str, Any]:
     """Run HPO via ClearML HyperParameterOptimizer.
 
-    This uses ClearML's native Optuna integration — no manual ask/tell/collect.
-    ClearML automatically creates Task clones, manages concurrency, and retries.
-
-    The script must report the objective via clearml Task.report_scalar()
-    during training so HyperParameterOptimizer can read it.
+    Args:
+        param_prefix: Prefix for parameter keys. The base task uses one of:
+            "Args/--" (argparse with -- prefix) or "Args/" (clearml Args section).
+            Default "Args/--". Override to "Args/" for tasks without -- prefix.
     """
     from clearml import Task
     from clearml.automation import (
@@ -612,7 +636,7 @@ def _run_hpo_optimizer(
             if spec.get("log", False):
                 hpo_params.append(
                     LogUniformParameterRange(
-                        f"Args/--{name}",
+                        f"{param_prefix}{name}",
                         min_value=spec["low"],
                         max_value=spec["high"],
                     )
@@ -620,7 +644,7 @@ def _run_hpo_optimizer(
             else:
                 hpo_params.append(
                     UniformParameterRange(
-                        f"Args/--{name}",
+                        f"{param_prefix}{name}",
                         min_value=spec["low"],
                         max_value=spec["high"],
                         step_size=spec.get("step"),
@@ -629,7 +653,7 @@ def _run_hpo_optimizer(
         elif ptype == "int":
             hpo_params.append(
                 UniformIntegerParameterRange(
-                    f"Args/--{name}",
+                    f"{param_prefix}{name}",
                     min_value=spec["low"],
                     max_value=spec["high"],
                     step_size=spec.get("step", 1),
@@ -638,7 +662,7 @@ def _run_hpo_optimizer(
         elif ptype == "categorical":
             hpo_params.append(
                 UniformParameterRange(
-                    f"Args/--{name}",
+                    f"{param_prefix}{name}",
                     min_value=0,
                     max_value=len(spec["choices"]) - 1,
                 )
