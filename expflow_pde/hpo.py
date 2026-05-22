@@ -450,7 +450,7 @@ def _run_hpo_distributed(
             trial_task.set_parameter(f"{param_prefix}{k}", str(v))
         if loss is not None:
             trial_task.set_parameter(f"{param_prefix}loss", loss)
-        trial_task.enqueue(queue)
+        Task.enqueue(task=trial_task, queue_name=queue)
         pending.append((trial, params, trial_task))
 
         while len(pending) >= parallel:

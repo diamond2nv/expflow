@@ -292,7 +292,7 @@ def enqueue_task(task_id: str, queue_name: str = "default") -> dict[str, Any]:
     """
     task_cls = _get_task_module()  # noqa: N806
     task = task_cls.get_task(task_id=task_id)
-    task.enqueue(queue_name=queue_name)
+    task_cls.enqueue(task=task, queue_name=queue_name)
     return {
         "task_id": task.id,
         "queue": queue_name,

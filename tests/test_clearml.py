@@ -231,7 +231,9 @@ class TestQueueOperations:
 
         enqueue_task("t1")
 
-        mock_task.enqueue.assert_called_once_with(queue_name="default")
+        mock_clearml_pkg.Task.enqueue.assert_called_once_with(
+            task=mock_task, queue_name="default"
+        )
 
     def test_dequeue_task_marks_dequeued(self, mock_clearml_pkg):
         mock_task = _make_mock_task("t1", "a", "p", "created")
