@@ -133,12 +133,14 @@ def list_tasks(
         task_name: Filter by task name (partial match).
         tags: Filter by tags (tasks must have ALL specified tags).
         status: Filter by status values (e.g. ['completed', 'failed']).
+            Passed via ``task_filter`` in clearml SDK >= 2.1.
 
     Returns:
         List of task dicts with id, name, project, status, tags, last_iteration.
     """
     task_cls = _get_task_module()  # noqa: N806
     kwargs: dict[str, Any] = {}
+    task_filter: dict[str, Any] = {}
     if project_name is not None:
         kwargs["project_name"] = project_name
     if task_name is not None:
@@ -146,7 +148,10 @@ def list_tasks(
     if tags is not None:
         kwargs["tags"] = tags
     if status is not None:
-        kwargs["status"] = status
+        task_filter["status"] = status
+
+    if task_filter:
+        kwargs["task_filter"] = task_filter
 
     tasks = task_cls.get_tasks(**kwargs)
     return [_serialize_task(t) for t in tasks]

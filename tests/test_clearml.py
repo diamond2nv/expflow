@@ -163,7 +163,9 @@ class TestListTasksArgs:
         from expflow_pde.clearml import list_tasks
 
         list_tasks(status=["completed"])
-        mock_clearml_pkg.Task.get_tasks.assert_called_with(status=["completed"])
+        mock_clearml_pkg.Task.get_tasks.assert_called_with(
+            task_filter={"status": ["completed"]}
+        )
 
     def test_no_args_passes_no_kwargs(self, mock_clearml_pkg):
         mock_clearml_pkg.Task.get_tasks.return_value = []
