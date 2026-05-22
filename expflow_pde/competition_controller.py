@@ -115,7 +115,7 @@ class CompetitionController:
         remaining = self._state.get("budget_remaining", float("inf"))
         return remaining > 0
 
-    def check_queue_depth(self, queue_name: str = "default") -> dict[str, int]:
+    def check_queue_depth(self, queue_name: str = "default") -> dict[str, Any]:
         """Check clearml queue depth before submitting a new task.
 
         If the queue has many pending items, the new task will experience
@@ -126,23 +126,29 @@ class CompetitionController:
             queue_name: Queue name to check.
 
         Returns:
-            dict with keys: running, pending, total.
-            Returns zeros on clearml connection failure.
+            dict with keys: running, pending, total, status (str).
+
+            On clearml connection failure returns status="unknown"
+            so callers can decide conservatively instead of assuming
+            the queue is empty.
         """
         try:
             from expflow_pde.clearml import get_queue_status
 
-            return get_queue_status(queue_name)
+            status = get_queue_status(queue_name)
+            status["status"] = "ok"
+            return status
         except Exception:
             logger.warning("Cannot check queue depth (clearml may be down)")
-            return {"running": 0, "pending": 0, "total": 0}
+            return {"running": 0, "pending": 0, "total": 0, "status": "unknown"}
 
     def should_wait_for_queue(self, queue_name: str = "default",
                                max_pending: int = 1) -> bool:
         """Decide whether Hermes should wait before submitting.
 
         Returns True if queue is too deep and submitting now would cause
-        scheduling delay inflation.
+        scheduling delay inflation. On connection failure, conservatively
+        returns True (wait).
 
         Args:
             queue_name: Queue to check.
@@ -152,6 +158,9 @@ class CompetitionController:
             True = wait before submit, False = submit now.
         """
         status = self.check_queue_depth(queue_name)
+        if status.get("status") == "unknown":
+            logger.warning("Queue status unknown — conservatively waiting")
+            return True
         pending = status.get("pending", 0)
         if pending > max_pending:
             logger.info("Queue %s has %d pending tasks — consider waiting",
