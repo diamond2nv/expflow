@@ -13,7 +13,7 @@ try:
 
     __version__ = _pkg_version("expflow-pde")
 except Exception:
-    __version__ = "0.0.0"
+    __version__ = "0.7.3"
 
 # ── Lazy import helpers ──
 # clearml/optuna/langfuse SDKs are optional dependencies.
