@@ -1037,3 +1037,42 @@ class TestSchedulerRemove:
 
         mock_scheduler.remove_task.assert_called_with(task_id="task_1")
         assert result["removed"] is True
+
+
+class TestValidateRepoUrl:
+    """validate_repo_url() — git URL format validation."""
+
+    def test_valid_owner_repo(self):
+        """Standard git@host:owner/repo.git passes."""
+        from expflow_pde.clearml import validate_repo_url
+
+        assert validate_repo_url("git@github.com:nousresearch/hermes.git")["valid"]
+
+    def test_rejects_double_nested(self):
+        """Double nesting like zhejianglab/Agentic4Sci/PDEBench.git rejected."""
+        from expflow_pde.clearml import validate_repo_url
+
+        assert not validate_repo_url("git@gitlab.zhejianglab.com:zhejianglab/Agentic4Sci/PDEBench.git")["valid"]
+
+    def test_rejects_no_git(self):
+        """HTTPS URLs are not valid for clearml."""
+        from expflow_pde.clearml import validate_repo_url
+
+        assert not validate_repo_url("https://github.com/owner/repo.git")["valid"]
+
+    def test_rejects_empty(self):
+        from expflow_pde.clearml import validate_repo_url
+
+        assert not validate_repo_url("")["valid"]
+
+    def test_rejects_deeply_nested(self):
+        """token-arena/office/expflow.git (3 levels) is rejected."""
+        from expflow_pde.clearml import validate_repo_url
+
+        assert not validate_repo_url("git@gitlab.zhejianglab.com:token-arena/office/expflow.git")["valid"]
+
+    def test_accepts_owner_with_dash(self):
+        """Org name with hyphens is fine."""
+        from expflow_pde.clearml import validate_repo_url
+
+        assert validate_repo_url("git@gitlab-pdebench:Agentic4Sci/PDEBench.git")["valid"]

@@ -12,7 +12,11 @@ from typing import Any, Literal
 # ── Internal helpers ──
 
 
-VALID_GIT_REPO_REGEX = r"^git@[\w.-]+:[\w/.\-]+\.git$"
+# Match git@host:owner/repo.git — exactly one path level between `:` and `.git`.
+# Rejects deeper nesting like `git@host:group/subgroup/repo.git`.
+# The pattern allows any characters except `/` in both owner and repo names.
+# Hyphens, dots, and underscores are common in both org and repo names.
+VALID_GIT_REPO_REGEX = r"^git@[\w.-]+:[\w.-]+/[\w.-]+\.git$"
 
 
 def validate_repo_url(repo_url: str) -> dict[str, bool | str]:
