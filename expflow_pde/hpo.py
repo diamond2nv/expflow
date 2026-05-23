@@ -197,8 +197,8 @@ def run_hpo(
     study_name: str | None = None,
     search_space: dict[str, dict[str, Any]] | None = None,
     storage: str | None = None,
-    direction: str = "maximize",
-    objective_metric: str = "seg_total",
+    direction: str | list[str] = "maximize",
+    objective_metric: str | list[str] = "seg_total",
     timeout_minutes: float | None = None,
     distributed: bool = False,
     queue: str | None = None,
@@ -219,32 +219,16 @@ def run_hpo(
     2. **distributed** (distributed=True): ask/tell + clearml Task clone/enqueue.
     3. **hpo_optimizer** (use_hpo_optimizer=True): ClearML HyperParameterOptimizer.
 
-    v0.9.0: search_bias/constraints/failures narrow the search space via
-    cond_search_space() before sampling. use_combined_score=True makes the
-    objective competition-aware (seg_total × 0.75 + time_score).
+    Multi-objective support: pass direction as a list of strings and
+    objective_metric as a list of metric names. Example:
+        run_hpo(..., direction=["maximize", "minimize"],
+                objective_metric=["seg_total", "train_time_minutes"])
 
     Args:
-        script: Path to training script.
-        n_trials: Number of trials.
-        n_jobs: Parallel/concurrent jobs.
-        study_name: Optuna study name (auto-generated if None).
-        search_space: Hyperparameter search space (default if None).
-        storage: Optuna storage URL.
-        direction: 'maximize' or 'minimize'.
-        objective_metric: Name of the objective metric.
-        timeout_minutes: Max runtime.
-        distributed: If True, use clearml ask/tell distribution.
-        queue: Target queue (required if distributed or use_hpo_optimizer).
-        project: ClearML project name.
-        pruner: Pruner type ('hyperband', 'median', 'percentile', or None).
-        use_hpo_optimizer: If True, use clearml HyperParameterOptimizer.
-        search_bias: From suggest_next_params — narrow search ranges.
-        constraints: Time budget etc. {"max_train_minutes": float}.
-        failures: From GoalOrchestrator — OOM suppression.
-        use_combined_score: If True, objective = combined_score(seg_total, train_minutes).
-
-    Returns:
-        Dict with study metadata and best results.
+        ...
+        direction: 'maximize', 'minimize', or a list for multi-objective.
+        objective_metric: Metric name or list of metric names for multi-objective.
+        ...
     """
     ss = cond_search_space(
         base_space=search_space or _DEFAULT_SEARCH_SPACE,
@@ -314,14 +298,17 @@ def _run_hpo_local(
     study_name: str | None,
     search_space: dict[str, dict[str, Any]],
     storage: str | None,
-    direction: str,
-    objective_metric: str,
+    direction: str | list[str],
+    objective_metric: str | list[str],
     timeout_minutes: float | None,
     pruner: str | None = "hyperband",
     loss: str | None = None,
     use_combined_score: bool = False,
 ) -> dict[str, Any]:
-    """Run HPO locally on this machine."""
+    """Run HPO locally on this machine.
+
+    Supports multi-objective: pass direction as a list, objective_metric as a list.
+    """
     optuna = _import_optuna()
 
     if study_name is None:
@@ -330,12 +317,17 @@ def _run_hpo_local(
 
     pruner_instance = _get_pruner(pruner)
 
+    # Normalize to multi-objective-friendly format
+    multi = isinstance(direction, list)
+    dirs = direction if multi else [direction]
+    metrics = objective_metric if multi else [objective_metric]
+
     try:
         study = optuna.load_study(study_name=study_name, storage=storage)
     except Exception:
         study = optuna.create_study(
             study_name=study_name,
-            direction=direction,
+            directions=dirs if multi else direction,
             storage=storage,
             pruner=pruner_instance,
         )
@@ -355,15 +347,18 @@ def _run_hpo_local(
         trial = study.ask()
         params = _suggest_params(trial, search_space)
         try:
-            value = _run_trial_local(script, params, objective_metric, loss=loss)
-            if value is not None:
-                study.tell(trial=trial, values=value)
+            values = _run_trial_local_multi(script, params, metrics, loss=loss)
+            if values is not None and all(v is not None for v in values):
+                if multi:
+                    study.tell(trial=trial, values=values)
+                else:
+                    study.tell(trial=trial, values=values[0])
                 completed += 1
             else:
-                _tell_failed(study, trial, direction)
+                _tell_failed(study, trial, dirs[0] if not multi else dirs[0])
                 failed += 1
         except Exception:
-            _tell_failed(study, trial, direction)
+            _tell_failed(study, trial, dirs[0] if not multi else dirs[0])
             failed += 1
 
     duration = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
@@ -381,8 +376,8 @@ def _run_hpo_distributed(
     parallel: int,
     study_name: str | None,
     search_space: dict[str, dict[str, Any]],
-    direction: str,
-    objective_metric: str,
+    direction: str | list[str],
+    objective_metric: str | list[str],
     timeout_minutes: float | None,
     queue: str,
     project: str,
@@ -391,7 +386,10 @@ def _run_hpo_distributed(
     use_combined_score: bool = False,
     param_prefix: str = "Args/",
 ) -> dict[str, Any]:
-    """Run HPO via clearml queue distribution (ask/tell mode)."""
+    """Run HPO via clearml queue distribution (ask/tell mode).
+
+    Supports multi-objective: pass direction as a list, objective_metric as a list.
+    """
     from clearml import Task
 
     optuna = _import_optuna()
@@ -410,9 +408,10 @@ def _run_hpo_distributed(
     try:
         study = optuna.load_study(study_name=study_name, storage=storage)
     except Exception:
+        multi = isinstance(direction, list)
         study = optuna.create_study(
             study_name=study_name,
-            direction=direction,
+            directions=direction if multi else direction,
             storage=storage,
             pruner=pruner_instance,
         )
@@ -494,8 +493,8 @@ def _run_hpo_distributed(
 def _collect_one_trial(
     study: Any,
     pending: list[tuple[Any, dict[str, Any], Any]],
-    objective_metric: str,
-    direction: str,
+    objective_metric: str | list[str],
+    direction: str | list[str],
     optuna: Any,
     poll_interval: float = 5.0,
     timeout_minutes: float | None = 60.0,
@@ -503,12 +502,14 @@ def _collect_one_trial(
 ) -> tuple[int, int] | None:
     """Wait for one pending trial to complete and report its result.
 
-    When use_combined_score=True, extracts both seg_total and train_time_minutes
-    from the clearml task scalars and computes combined_score() for the objective.
-    Falls back to objective_metric extraction if combined score is unavailable.
+    Supports both single and multi-objective. For multi-objective, returns
+    a list of values extracted from each metric name in ``objective_metric``.
     """
     if not pending:
         return None
+
+    multi = isinstance(direction, list)
+    metrics = objective_metric if multi else [objective_metric]
 
     start = time.time()
     timeout_sec = (timeout_minutes or 60.0) * 60
@@ -523,20 +524,57 @@ def _collect_one_trial(
             if status in ("completed", "failed", "stopped"):
                 trial_obj, param, tsk = pending.pop(i)
                 if status == "completed":
-                    if use_combined_score:
-                        value = _extract_combined_score(tsk)
-                    else:
-                        value = _extract_metric_from_task(tsk, objective_metric)
-                    if value is not None:
-                        study.tell(trial=trial_obj, values=value)
+                    values = _extract_metrics_from_task(tsk, metrics)
+                    if values is not None and all(v is not None for v in values):
+                        if multi:
+                            study.tell(trial=trial_obj, values=values)
+                        else:
+                            study.tell(trial=trial_obj, values=values[0])
                         return (1, 0)
                     else:
-                        study.tell(trial=trial_obj, values=_failed_value(direction))
+                        study.tell(
+                            trial=trial_obj,
+                            values=_failed_value(direction[0] if multi else direction),
+                        )
                         return (0, 1)
                 else:
-                    study.tell(trial=trial_obj, values=_failed_value(direction))
+                    study.tell(
+                        trial=trial_obj, values=_failed_value(direction[0] if multi else direction)
+                    )
                     return (0, 1)
         time.sleep(poll_interval)
+    return None
+
+
+def _extract_metrics_from_task(task: Any, metrics: list[str]) -> list[float | None] | None:
+    """Extract multiple metric values from a completed clearml task.
+
+    Returns a list of values in the same order as ``metrics``, or None if none found.
+    """
+    if not metrics:
+        return None
+    try:
+        scalars = task.get_last_scalar_metrics()
+    except Exception:
+        return None
+
+    values: list[float | None] = []
+    for m in metrics:
+        val = _extract_single_metric_from_scalars(scalars, m)
+        values.append(val)
+
+    if all(v is None for v in values):
+        return None
+    return values
+
+
+def _extract_single_metric_from_scalars(scalars: dict, metric_name: str) -> float | None:
+    """Extract a single metric value from clearml scalars dict using fuzzy matching."""
+    norm_target = _normalize_metric_name(metric_name)
+    for group, metrics in scalars.items():
+        for key, val in metrics.items():
+            if _normalize_metric_name(key) == norm_target:
+                return float(val["last"])
     return None
 
 
@@ -833,6 +871,61 @@ def _suggest_params(trial: Any, search_space: dict[str, dict[str, Any]]) -> dict
     return params
 
 
+def _run_trial_local_multi(
+    script: str,
+    params: dict[str, Any],
+    metrics: list[str],
+    loss: str | None = None,
+) -> list[float | None] | None:
+    """Run a single trial locally and extract multiple metrics.
+
+    Returns a list of values in the same order as ``metrics``,
+    or None if none of the metrics could be extracted.
+    """
+    cmd = [script]
+    for k, v in params.items():
+        cmd.append(f"--{k}={v}")
+    if loss is not None:
+        cmd.append(f"--loss={loss}")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        return None
+
+    values: list[float | None] = []
+    for m in metrics:
+        val = _extract_stdout_metric(result.stdout, m)
+        values.append(val)
+
+    if all(v is None for v in values):
+        return None
+    return values
+
+
+def _extract_stdout_metric(output: str, metric_name: str) -> float | None:
+    """Extract a single metric value from a subprocess stdout."""
+    prefix = f"METRIC:{metric_name}="
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            try:
+                return float(line[len(prefix) :])
+            except (ValueError, TypeError):
+                continue
+
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        try:
+            data = json.loads(line)
+            if metric_name in data:
+                return float(data[metric_name])
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    return None
+
+
 def _run_trial_local(
     script: str, params: dict[str, Any], objective_metric: str, loss: str | None = None
 ) -> float | None:
@@ -885,18 +978,23 @@ def _build_result(
     n_trials: int,
     completed: int,
     failed: int,
-    direction: str,
+    direction: str | list[str],
     duration_sec: float,
     timeout_minutes: float | None,
 ) -> dict[str, Any]:
-    """Build a standardized result dict from study data."""
+    """Build a standardized result dict from study data.
+
+    For multi-objective studies, ``best_value`` will be a list of values.
+    """
     best_trial = study.best_trial if hasattr(study, "best_trial") and study.best_trial else None
     return {
         "study_name": study_name,
         "n_trials": n_trials,
         "completed": completed,
         "failed": failed,
-        "best_value": best_trial.value if best_trial else None,
+        "best_value": best_trial.values
+        if best_trial and isinstance(direction, list)
+        else (best_trial.value if best_trial else None),
         "best_params": best_trial.params if best_trial else None,
         "direction": direction,
         "duration_sec": duration_sec,
