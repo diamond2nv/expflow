@@ -625,3 +625,176 @@ class TestRunHpoHierarchical:
             )
 
         assert result["best_value"] == 0.2  # Phase 2 lower = better for minimize
+
+
+# ── Tests: _load_trials_from_storage ──
+
+
+class TestLoadTrialsFromStorage:
+    """Tests for _load_trials_from_storage — reading Optuna trials from SQLite."""
+
+    def test_load_trials_no_storage_returns_empty(self):
+        """Without storage, should return empty list."""
+        from expflow_pde.hpo import _load_trials_from_storage
+
+        result = _load_trials_from_storage("no_such_study")
+        assert result == []
+
+    def test_load_trials_with_mock_optuna(self):
+        """Should load and restore trial values correctly for maximize."""
+        from expflow_pde.hpo import _load_trials_from_storage
+
+        mock_optuna = MagicMock()
+        mock_study = MagicMock()
+
+        # Simulate 3 trials: maximize stores -value internally
+        trial1 = MagicMock(number=0, value=-90.0, params={"lr": 0.001})
+        trial2 = MagicMock(number=1, value=-75.0, params={"lr": 0.002})
+        trial3 = MagicMock(number=2, value=-60.0, params={"lr": 0.01})
+        mock_study.trials = [trial1, trial2, trial3]
+
+        mock_optuna.load_study.return_value = mock_study
+
+        with patch("expflow_pde.hpo._import_optuna", return_value=mock_optuna):
+            # Also need a matching DB file — patch glob to succeed
+            with patch("glob.glob", return_value=["/tmp/test_optuna.db"]):
+                result = _load_trials_from_storage("test_study", direction="maximize")
+
+        assert len(result) == 3
+        assert result[0]["value"] == 90.0  # restored from -90
+        assert result[1]["value"] == 75.0
+        assert result[2]["value"] == 60.0
+
+    def test_load_trials_minimize_direction(self):
+        """minimize direction should not negate values."""
+        from expflow_pde.hpo import _load_trials_from_storage
+
+        mock_optuna = MagicMock()
+        mock_study = MagicMock()
+
+        trial1 = MagicMock(number=0, value=0.5, params={"lr": 0.01})
+        trial2 = MagicMock(number=1, value=0.2, params={"lr": 0.001})
+        trial3 = MagicMock(number=2, value=0.8, params={"lr": 0.1})
+        mock_study.trials = [trial1, trial2, trial3]
+
+        mock_optuna.load_study.return_value = mock_study
+
+        with patch("expflow_pde.hpo._import_optuna", return_value=mock_optuna):
+            with patch("glob.glob", return_value=["/tmp/test_optuna.db"]):
+                result = _load_trials_from_storage("test_study", direction="minimize")
+
+        # Values stay as-is for minimize; sorted descending for _narrow_space consumption
+        assert result[0]["value"] == 0.8  # highest first
+        assert result[1]["value"] == 0.5
+        assert result[2]["value"] == 0.2
+
+
+# ── Tests: Hierarchical integration with narrowing ──
+
+
+class TestHierarchicalNarrowing:
+    """Tests that run_hpo_hierarchical properly triggers narrowing."""
+
+    def test_hierarchical_calls_narrow_space_when_enough_trials(self):
+        """With enough Phase 1 trials, _narrow_space should be called."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        base_result = {
+            "study_name": "test",
+            "n_trials": 5,
+            "completed": 5,
+            "failed": 0,
+            "best_value": 50.0,
+            "best_params": {"lr": 0.001, "epochs": 80},
+            "direction": "maximize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+
+        mock_trials = [
+            {"number": 0, "value": 90.0, "params": {"lr": 0.001, "epochs": 100}},
+            {"number": 1, "value": 75.0, "params": {"lr": 0.002, "epochs": 80}},
+            {"number": 2, "value": 60.0, "params": {"lr": 0.01, "epochs": 50}},
+        ]
+
+        with (
+            patch("expflow_pde.hpo.run_hpo", return_value=base_result) as mock_run,
+            patch(
+                "expflow_pde.hpo._load_trials_from_storage",
+                return_value=mock_trials,
+            ) as mock_load,
+            patch("expflow_pde.hpo._narrow_space") as mock_narrow,
+        ):
+            run_hpo_hierarchical(
+                script="train.py",
+                n_trials=25,
+                n_stage1=5,
+            )
+
+        assert mock_run.call_count == 2
+        mock_load.assert_called_once()
+        # _narrow_space should have been called with mock_trials and search_space
+        mock_narrow.assert_called_once()
+        args = mock_narrow.call_args[0]
+        assert args[0] == mock_trials  # trials passed
+        assert "lr" in args[1]  # search space passed
+
+    def test_hierarchical_skips_narrowing_when_few_trials(self):
+        """Without enough Phase 1 trials, _narrow_space should not be called."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        base_result = {
+            "study_name": "test",
+            "n_trials": 2,
+            "completed": 2,
+            "failed": 0,
+            "best_value": 50.0,
+            "best_params": {"lr": 0.001, "epochs": 80},
+            "direction": "maximize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+
+        with (
+            patch("expflow_pde.hpo.run_hpo", return_value=base_result),
+            patch("expflow_pde.hpo._load_trials_from_storage", return_value=[]),
+            patch("expflow_pde.hpo._narrow_space") as mock_narrow,
+        ):
+            run_hpo_hierarchical(
+                script="train.py",
+                n_trials=10,
+                n_stage1=2,
+            )
+
+        # _narrow_space should NOT be called (fewer than 3 trials)
+        mock_narrow.assert_not_called()
+
+    def test_hierarchical_fallback_to_best_trial_when_storage_empty(self):
+        """When _load_trials_from_storage returns empty, fall back to best trial."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        base_result = {
+            "study_name": "test",
+            "n_trials": 5,
+            "completed": 5,
+            "failed": 0,
+            "best_value": 50.0,
+            "best_params": {"lr": 0.001, "epochs": 80},
+            "direction": "maximize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+
+        with (
+            patch("expflow_pde.hpo.run_hpo", return_value=base_result),
+            patch("expflow_pde.hpo._load_trials_from_storage", return_value=[]),
+            patch("expflow_pde.hpo._narrow_space") as mock_narrow,
+        ):
+            run_hpo_hierarchical(
+                script="train.py",
+                n_trials=25,
+                n_stage1=5,
+            )
+
+        # _narrow_space should NOT be called (fewer than 3 trials from fallback too)
+        mock_narrow.assert_not_called()

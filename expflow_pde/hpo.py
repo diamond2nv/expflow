@@ -1005,11 +1005,72 @@ def _build_result(
 # ── Hierarchical HPO (Sprint 2) ──
 
 
+def _load_trials_from_storage(
+    study_name: str,
+    storage: str | None = None,
+    direction: str = "maximize",
+) -> list[dict[str, Any]]:
+    """Load all completed trials from an Optuna study storage.
+
+    Args:
+        study_name: Optuna study name.
+        storage: Storage URL (default: ~/.expflow/optuna_<name>.db).
+        direction: Optimization direction ('maximize' or 'minimize').
+
+    Returns:
+        List of trial dicts with keys: value, params, number.
+        Empty list if the study cannot be loaded or has no trials.
+    """
+    try:
+        optuna = _import_optuna()
+    except ImportError:
+        return []
+
+    resolved_storage: str | None = storage
+    if resolved_storage is None:
+        import glob
+
+        db_pattern = os.path.expanduser(f"~/.expflow/optuna_{study_name}.db")
+        matching = glob.glob(db_pattern)
+        if matching:
+            resolved_storage = f"sqlite:///{matching[0]}"
+
+    if not resolved_storage:
+        return []
+
+    try:
+        study = optuna.load_study(study_name=study_name, storage=resolved_storage)
+    except Exception:
+        return []
+
+    is_maximize = direction == "maximize"
+    trials: list[dict[str, Any]] = []
+    for t in study.trials:
+        val = t.value
+        if val is None:
+            continue
+        # Optuna internally minimizes everything.
+        # For maximize: it stores -value, so we negate back.
+        # For minimize: it stores value directly.
+        restored = val if not is_maximize else (-val if val is not None else None)
+        trials.append(
+            {
+                "number": t.number,
+                "value": restored,
+                "params": dict(t.params) if t.params else {},
+            }
+        )
+    # Sort by value descending (best first, regardless of direction)
+    trials.sort(key=lambda x: x["value"], reverse=True)
+    return trials
+
+
 def _narrow_space(
     trials: list[dict[str, Any]],
     search_space: dict[str, dict[str, Any]],
     top_frac: float = 0.2,
     shrink_factor: float = 0.5,
+    direction: str = "maximize",
 ) -> dict[str, dict[str, Any]]:
     """Narrow search space based on top-performing trial params.
 
@@ -1019,11 +1080,13 @@ def _narrow_space(
 
     Args:
         trials: List of trial dicts with keys: value, params (dict of param_name=val).
+            Values should already be positively-ordered (higher = better).
         search_space: Original search space definition.
         top_frac: Fraction of best trials to use for narrowing (default 0.2).
         shrink_factor: Multiplier for new range width relative to best-value
             spread. 0.5 means the new range is 50% of the top-performer spread.
             Must be in (0, 1].
+        direction: Optimization direction ('maximize' or 'minimize').
 
     Returns:
         A new search space dict with narrowed float/int ranges.
@@ -1032,9 +1095,11 @@ def _narrow_space(
     if len(trials) < 3:
         return dict(search_space)
 
-    # Determine direction -- heuristic: higher is better by default
     top_n = max(1, int(len(trials) * top_frac))
-    sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=True)
+    if direction == "maximize":
+        sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=True)
+    else:
+        sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=False)
     top_trials = sorted_trials[:top_n]
 
     narrowed: dict[str, dict[str, Any]] = {}
@@ -1167,17 +1232,23 @@ def run_hpo_hierarchical(
         **kwargs,
     )
 
-    # Build trial history for narrowing from phase1 result
-    phase1_trials: list[dict[str, Any]] = []
-    best_value = phase1.get("best_value")
-    best_params = phase1.get("best_params")
-    if best_value is not None and best_params is not None:
-        phase1_trials.append({"value": best_value, "params": best_params})
+    # Build trial history for narrowing from phase1 study storage
+    phase1_trials: list[dict[str, Any]] = _load_trials_from_storage(
+        study_name=s1_name,
+        storage=storage,
+        direction=direction,
+    )
+    if not phase1_trials:
+        # Fallback: use best trial only
+        bv = phase1.get("best_value")
+        bp = phase1.get("best_params")
+        if bv is not None and bp is not None:
+            phase1_trials.append({"value": bv, "params": bp})
 
     # Narrow search space
-    if phase1_trials and phase1.get("completed", 0) >= 2:
+    if len(phase1_trials) >= 3:
         narrowed_ss = _narrow_space(
-            phase1_trials, ss, top_frac=top_frac, shrink_factor=shrink_factor
+            phase1_trials, ss, top_frac=top_frac, shrink_factor=shrink_factor, direction=direction
         )
     else:
         narrowed_ss = dict(ss)
