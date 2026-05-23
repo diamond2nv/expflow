@@ -402,3 +402,226 @@ class TestRunHPODistributed:
             )
 
             assert result["study_name"] == "test_dist_fallback"
+
+
+# ── Tests: _narrow_space ──
+
+
+class TestNarrowSpace:
+    """Tests for _narrow_space — hierarchical HPO search space narrowing."""
+
+    TOP_3_SEARCH_SPACE = {
+        "lr": {"type": "float", "low": 1e-6, "high": 1.0, "log": True},
+        "epochs": {"type": "int", "low": 10, "high": 200},
+        "arch": {"type": "categorical", "choices": ["FNO", "DeepONet"]},
+    }
+
+    def test_narrow_space_minimal_trials_returns_original(self):
+        """With fewer than 3 trials, return original space unchanged."""
+        from expflow_pde.hpo import _narrow_space
+
+        trials = [{"value": 50.0, "params": {"lr": 0.01, "epochs": 80, "arch": "FNO"}}]
+        result = _narrow_space(trials, self.TOP_3_SEARCH_SPACE)
+        assert result == self.TOP_3_SEARCH_SPACE
+
+    def test_narrow_space_float_range_reduces(self):
+        """Float params should be narrowed around top performers."""
+        from expflow_pde.hpo import _narrow_space
+
+        trials = [
+            {"value": 80.0, "params": {"lr": 0.001, "epochs": 120, "arch": "FNO"}},
+            {"value": 75.0, "params": {"lr": 0.002, "epochs": 100, "arch": "DeepONet"}},
+            {"value": 60.0, "params": {"lr": 0.01, "epochs": 50, "arch": "FNO"}},
+        ]
+        result = _narrow_space(trials, self.TOP_3_SEARCH_SPACE, top_frac=0.67)
+
+        # lr should be narrowed around 0.001-0.002 range
+        assert result["lr"]["low"] >= 1e-6
+        assert result["lr"]["high"] < 1.0
+
+        # categorical unchanged
+        assert result["arch"] == self.TOP_3_SEARCH_SPACE["arch"]
+
+    def test_narrow_space_int_rounding(self):
+        """Int ranges should be rounded and have min gap of 1."""
+        from expflow_pde.hpo import _narrow_space
+
+        trials = [
+            {"value": 90.0, "params": {"lr": 0.001, "epochs": 100, "arch": "FNO"}},
+            {"value": 88.0, "params": {"lr": 0.0012, "epochs": 95, "arch": "FNO"}},
+            {"value": 85.0, "params": {"lr": 0.0011, "epochs": 90, "arch": "FNO"}},
+        ]
+        result = _narrow_space(trials, self.TOP_3_SEARCH_SPACE, top_frac=0.67)
+
+        assert isinstance(result["epochs"]["low"], int)
+        assert isinstance(result["epochs"]["high"], int)
+        assert result["epochs"]["high"] >= result["epochs"]["low"] + 1
+
+    def test_narrow_space_identical_top_values(self):
+        """When all top values are identical, narrow from original range."""
+        from expflow_pde.hpo import _narrow_space
+
+        trials = [
+            {"value": 70.0, "params": {"lr": 0.001, "epochs": 80, "arch": "FNO"}},
+            {"value": 69.0, "params": {"lr": 0.001, "epochs": 80, "arch": "FNO"}},
+            {"value": 68.0, "params": {"lr": 0.001, "epochs": 80, "arch": "FNO"}},
+        ]
+        result = _narrow_space(trials, self.TOP_3_SEARCH_SPACE, top_frac=0.67)
+
+        # Should still be narrowed, not identical to original
+        assert result["lr"]["high"] < 1.0
+        assert result["epochs"]["high"] < 200
+        assert result["epochs"]["low"] >= 10
+
+
+# ── Tests: run_hpo_hierarchical ──
+
+
+class TestRunHpoHierarchical:
+    """Tests for run_hpo_hierarchical — two-stage HPO."""
+
+    def test_hierarchical_delegates_to_run_hpo(self):
+        """run_hpo_hierarchical should call run_hpo twice and merge results."""
+        base_result = {
+            "study_name": "test",
+            "n_trials": 20,
+            "completed": 20,
+            "failed": 0,
+            "best_value": 50.0,
+            "best_params": {"lr": 0.001, "epochs": 80},
+            "direction": "maximize",
+            "duration_sec": 30.0,
+            "timeout_minutes": None,
+        }
+
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        with patch("expflow_pde.hpo.run_hpo", return_value=base_result) as mock_run:
+            result = run_hpo_hierarchical(
+                script="train.py",
+                n_trials=50,
+                n_stage1=10,
+            )
+
+        assert mock_run.call_count == 2
+        assert result["method"] == "hierarchical"
+        assert result["n_trials"] == 50
+        assert result["completed"] == 40  # 20 + 20
+        assert result["best_value"] == 50.0
+        assert "phase_1" in result
+        assert "phase_2" in result
+
+    def test_hierarchical_picks_best_phase(self):
+        """Should select the phase with the better best_value."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        phase1_result = {
+            "study_name": "s1",
+            "n_trials": 10,
+            "completed": 10,
+            "failed": 0,
+            "best_value": 60.0,
+            "best_params": {"lr": 0.001},
+            "direction": "maximize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+        phase2_result = {
+            "study_name": "s2",
+            "n_trials": 40,
+            "completed": 40,
+            "failed": 0,
+            "best_value": 75.0,
+            "best_params": {"lr": 0.0005},
+            "direction": "maximize",
+            "duration_sec": 60.0,
+            "timeout_minutes": None,
+        }
+
+        with patch("expflow_pde.hpo.run_hpo", side_effect=[phase1_result, phase2_result]):
+            result = run_hpo_hierarchical(
+                script="train.py",
+                n_trials=50,
+                n_stage1=10,
+                direction="maximize",
+            )
+
+        # Phase 2 is better (75 > 60)
+        assert result["best_value"] == 75.0
+        assert result["best_params"] == {"lr": 0.0005}
+
+    def test_hierarchical_picks_phase1_when_better(self):
+        """When phase 1 has the better value, the merged result uses phase 1."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        phase1_result = {
+            "study_name": "s1",
+            "n_trials": 10,
+            "completed": 10,
+            "failed": 0,
+            "best_value": 95.0,
+            "best_params": {"lr": 0.01},
+            "direction": "maximize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+        phase2_result = {
+            "study_name": "s2",
+            "n_trials": 40,
+            "completed": 40,
+            "failed": 0,
+            "best_value": 80.0,
+            "best_params": {"lr": 0.001},
+            "direction": "maximize",
+            "duration_sec": 60.0,
+            "timeout_minutes": None,
+        }
+
+        with patch("expflow_pde.hpo.run_hpo", side_effect=[phase1_result, phase2_result]):
+            result = run_hpo_hierarchical(
+                script="train.py",
+                n_trials=50,
+                n_stage1=10,
+                direction="maximize",
+            )
+
+        # Phase 1 is better (95 > 80)
+        assert result["best_value"] == 95.0
+        assert result["best_params"] == {"lr": 0.01}
+
+    def test_hierarchical_minimize_direction(self):
+        """Should pick the lower value for minimize direction."""
+        from expflow_pde.hpo import run_hpo_hierarchical
+
+        phase1_result = {
+            "study_name": "s1",
+            "n_trials": 10,
+            "completed": 10,
+            "failed": 0,
+            "best_value": 0.5,
+            "best_params": {"lr": 0.01},
+            "direction": "minimize",
+            "duration_sec": 15.0,
+            "timeout_minutes": None,
+        }
+        phase2_result = {
+            "study_name": "s2",
+            "n_trials": 40,
+            "completed": 40,
+            "failed": 0,
+            "best_value": 0.2,
+            "best_params": {"lr": 0.001},
+            "direction": "minimize",
+            "duration_sec": 60.0,
+            "timeout_minutes": None,
+        }
+
+        with patch("expflow_pde.hpo.run_hpo", side_effect=[phase1_result, phase2_result]):
+            result = run_hpo_hierarchical(
+                script="train.py",
+                n_trials=50,
+                n_stage1=10,
+                direction="minimize",
+            )
+
+        assert result["best_value"] == 0.2  # Phase 2 lower = better for minimize

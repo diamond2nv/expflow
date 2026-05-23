@@ -10,7 +10,6 @@ from expflow_pde.goal_orchestrator import (
     load,
     resolve_pipeline_state,
     save,
-    _set_state_path,
 )
 
 
@@ -141,8 +140,9 @@ class TestGoalOrchestrator:
 
     def test_verify_state_rejects_bad_keys(self):
         """Non-English keys should raise ValueError."""
-        from expflow_pde.goal_orchestrator import _verify_state
         import pytest
+
+        from expflow_pde.goal_orchestrator import _verify_state
         with pytest.raises(ValueError, match="unexpected state key"):
             _verify_state({"建议": {"n_modes": 24}})
 

@@ -26,7 +26,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ── Mock clearml package ──
 
 
@@ -146,7 +145,6 @@ class TestGoalLoopMock:
 
     def simulate_task1(self, ctrl) -> dict[str, Any]:
         """Run up to 5 iterations on task1; stop on stagnation."""
-        from expflow_pde.goal_orchestrator import load as _go_load, save as _go_save
 
         state = {'best_score': 0, 'best_params': {}, 'best_eval_id': None}
         stagnation_count = 0
@@ -200,10 +198,11 @@ class TestGoalLoopMock:
     def test_full_goal_loop(self, mock_clearml_pkg, expflow_home):
         """Simulate a full goal loop across 2 tasks."""
         import importlib
+
         import expflow_pde.goal_orchestrator as go_mod
         importlib.reload(go_mod)
-        from expflow_pde.goal_orchestrator import load as _go_load, save as _go_save
         from expflow_pde.competition_controller import CompetitionController
+        from expflow_pde.goal_orchestrator import load as _go_load
 
         ctrl = CompetitionController(
             session_id='sess_e2e_test',
@@ -243,10 +242,12 @@ class TestGoalLoopMock:
     def test_stagnation_triggers_switch(self, mock_clearml_pkg, expflow_home):
         """StagnationDetector fires after 3 repeated plateau scores."""
         import importlib
+
         import expflow_pde.goal_orchestrator as go_mod
         importlib.reload(go_mod)
-        from expflow_pde.goal_orchestrator import load as _go_load, save as _go_save
         from expflow_pde.competition_controller import CompetitionController
+        from expflow_pde.goal_orchestrator import load as _go_load
+        from expflow_pde.goal_orchestrator import save as _go_save
 
         ctrl = CompetitionController(
             session_id='sess_stag_test',

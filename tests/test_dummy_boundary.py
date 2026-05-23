@@ -20,15 +20,21 @@ import os
 import pytest
 
 from expflow_pde.competition_controller import CompetitionController, _parse_deadline
-from expflow_pde.dummy.game import DummyExperimentGame, _FAILURE_TEMPLATES, _CEILING
+from expflow_pde.dummy.game import _CEILING, _FAILURE_TEMPLATES, DummyExperimentGame
 from expflow_pde.goal_orchestrator import (
-    add_learned_failure,
-    clear as gs_clear,
-    load as gs_load,
-    resolve_pipeline_state,
-    save as gs_save,
     _set_state_path,
     _verify_state,
+    add_learned_failure,
+    resolve_pipeline_state,
+)
+from expflow_pde.goal_orchestrator import (
+    clear as gs_clear,
+)
+from expflow_pde.goal_orchestrator import (
+    load as gs_load,
+)
+from expflow_pde.goal_orchestrator import (
+    save as gs_save,
 )
 from expflow_pde.repair import RepairStage, _describe_params
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import re as _re
 from typing import Any
 

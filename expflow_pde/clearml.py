@@ -67,6 +67,7 @@ def _call_queue_service(action: str) -> dict[str, Any]:
     ``action`` is a PascalCase request name e.g. ``get_all`` → ``GetAllRequest``.
     """
     import importlib
+
     from clearml import Task
 
     svc = importlib.import_module("clearml.backend_api.services.v2_23.queues")
@@ -80,6 +81,7 @@ def _call_queue_service(action: str) -> dict[str, Any]:
 def _call_worker_service(action: str) -> dict[str, Any]:
     """Call clearml backend worker service via SDK session."""
     import importlib
+
     from clearml import Task
 
     svc = importlib.import_module("clearml.backend_api.services.v2_23.workers")

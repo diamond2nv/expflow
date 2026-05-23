@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.helpers import _make_mock_queue, _make_mock_task
+from tests.helpers import _make_mock_task
 
 # ── Helpers ──
 

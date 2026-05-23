@@ -241,6 +241,11 @@ def hpo_run_cmd(
         "--param-prefix",
         help="Parameter prefix for clearml task. Args/ for clearml Args section, Args/-- for -- style",
     ),
+    hierarchical: bool = typer.Option(
+        False,
+        "--hierarchical",
+        help="Two-stage hierarchical HPO: Phase 1 random explore, Phase 2 TPE fine-tune",
+    ),
 ) -> None:
     """Run hyperparameter optimization on a script.
 
@@ -250,29 +255,48 @@ def hpo_run_cmd(
     - **Optimizer** (--optimizer, --queue): ClearML HyperParameterOptimizer
       (native Optuna integration, recommended for production).
 
+    **Hierarchical** (--hierarchical): two-stage search across any mode.
+      Phase 1 random explore (~20% budget), Phase 2 TPE refine on narrowed space.
+
     The training script must output METRIC:<name>=<value> lines (local mode)
     or report clearml scalars (distributed/optimizer mode).
     """
-    from expflow_pde.hpo import run_hpo
+    from expflow_pde.hpo import run_hpo, run_hpo_hierarchical
 
     pruner_val = pruner if pruner.lower() != "none" else None
 
-    result = run_hpo(
-        script=script,
-        n_trials=trials,
-        n_jobs=n_jobs,
-        study_name=study_name,
-        direction=direction,
-        objective_metric=metric,
-        timeout_minutes=timeout,
-        distributed=distributed,
-        queue=queue,
-        project=project,
-        pruner=pruner_val,
-        use_hpo_optimizer=optimizer,
-        loss=loss,
-        param_prefix=param_prefix,
-    )
+    if hierarchical:
+        result = run_hpo_hierarchical(
+            script=script,
+            n_trials=trials,
+            n_jobs=n_jobs,
+            study_name=study_name,
+            direction=direction,
+            objective_metric=metric,
+            timeout_minutes=timeout,
+            distributed=distributed,
+            queue=queue,
+            project=project,
+            loss=loss,
+            param_prefix=param_prefix,
+        )
+    else:
+        result = run_hpo(
+            script=script,
+            n_trials=trials,
+            n_jobs=n_jobs,
+            study_name=study_name,
+            direction=direction,
+            objective_metric=metric,
+            timeout_minutes=timeout,
+            distributed=distributed,
+            queue=queue,
+            project=project,
+            pruner=pruner_val,
+            use_hpo_optimizer=optimizer,
+            loss=loss,
+            param_prefix=param_prefix,
+        )
 
     if "error" in result:
         print(f"Error: {result['error']}")

@@ -180,7 +180,6 @@ class TestDiagnoseExperiment:
     """diagnose_experiment() — degradation pattern detection."""
 
     def test_diagnose_stable(self):
-        from expflow_pde.analyze import diagnose_experiment
 
         result = diagnose_experiment(json_path="nonexistent.json")
         assert result is None  # file not found
@@ -190,7 +189,6 @@ class TestDiagnoseExperiment:
         import os
         import tempfile
 
-        from expflow_pde.analyze import diagnose_experiment
 
         data = {
             "segmented_scores": {
@@ -218,7 +216,6 @@ class TestDiagnoseExperiment:
         import os
         import tempfile
 
-        from expflow_pde.analyze import diagnose_experiment
 
         data = {
             "segmented_scores": {
@@ -249,7 +246,6 @@ class TestDiagnoseExperiment:
         import os
         import tempfile
 
-        from expflow_pde.analyze import diagnose_experiment
 
         data = {
             "segmented_scores": {
@@ -277,7 +273,6 @@ class TestDiagnoseExperiment:
         import os
         import tempfile
 
-        from expflow_pde.analyze import diagnose_experiment
 
         data = {"_error": "clearml server connection failed: test"}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -321,6 +316,7 @@ class TestCrossTaskTransfer:
     def _with_meta(tmpdir, task_id, strategies):
         """Write task meta to a temp dir and set EXPFLOW_HOME."""
         import os
+
         import yaml
 
         tdir = str(tmpdir)

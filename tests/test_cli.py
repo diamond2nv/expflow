@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 from expflow_pde import __version__ as _ver
 from expflow_pde.cli import app
-from tests.helpers import _make_mock_queue, _make_mock_task
+from tests.helpers import _make_mock_task
 
 runner = CliRunner()
 

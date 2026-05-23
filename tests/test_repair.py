@@ -583,10 +583,10 @@ class TestRepeatDiagnoseCLI:
         with open(fpath, "w") as f:
             json.dump(data, f)
 
-        from expflow_pde.cli_repeat import repeat_diagnose_cmd
-
         # Capture output — command prints to stdout
         from io import StringIO
+
+        from expflow_pde.cli_repeat import repeat_diagnose_cmd
 
         captured = StringIO()
         old_stdout = sys.stdout
@@ -614,9 +614,9 @@ class TestRepeatDiagnoseCLI:
         with open(fpath, "w") as f:
             json.dump(data, f)
 
-        from expflow_pde.cli_repeat import repeat_diagnose_cmd
-
         from io import StringIO
+
+        from expflow_pde.cli_repeat import repeat_diagnose_cmd
 
         captured = StringIO()
         old_stdout = sys.stdout

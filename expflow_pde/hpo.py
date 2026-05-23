@@ -1000,3 +1000,235 @@ def _build_result(
         "duration_sec": duration_sec,
         "timeout_minutes": timeout_minutes,
     }
+
+
+# ── Hierarchical HPO (Sprint 2) ──
+
+
+def _narrow_space(
+    trials: list[dict[str, Any]],
+    search_space: dict[str, dict[str, Any]],
+    top_frac: float = 0.2,
+    shrink_factor: float = 0.5,
+) -> dict[str, dict[str, Any]]:
+    """Narrow search space based on top-performing trial params.
+
+    Analyzes the top ``top_frac`` fraction of trials by value (descending
+    for maximize, ascending for minimize) and shrinks float/int ranges
+    to a tighter interval around the top performers.
+
+    Args:
+        trials: List of trial dicts with keys: value, params (dict of param_name=val).
+        search_space: Original search space definition.
+        top_frac: Fraction of best trials to use for narrowing (default 0.2).
+        shrink_factor: Multiplier for new range width relative to best-value
+            spread. 0.5 means the new range is 50% of the top-performer spread.
+            Must be in (0, 1].
+
+    Returns:
+        A new search space dict with narrowed float/int ranges.
+        Categorical and boolean params are returned unchanged.
+    """
+    if len(trials) < 3:
+        return dict(search_space)
+
+    # Determine direction -- heuristic: higher is better by default
+    top_n = max(1, int(len(trials) * top_frac))
+    sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=True)
+    top_trials = sorted_trials[:top_n]
+
+    narrowed: dict[str, dict[str, Any]] = {}
+    for name, spec in search_space.items():
+        ptype = spec.get("type", "")
+        if ptype not in ("float", "int"):
+            narrowed[name] = dict(spec)
+            continue
+
+        top_vals = [
+            t["params"].get(name)
+            for t in top_trials
+            if t.get("params") and t["params"].get(name) is not None
+        ]
+        top_vals = [v for v in top_vals if isinstance(v, (int, float))]
+        if len(top_vals) < 2:
+            narrowed[name] = dict(spec)
+            continue
+
+        orig_low = spec["low"]
+        orig_high = spec["high"]
+        orig_range = orig_high - orig_low
+
+        best_min = min(top_vals)
+        best_max = max(top_vals)
+        best_mid = (best_min + best_max) / 2.0
+        best_spread = best_max - best_min
+        # If all top values are identical, use the original range as reference
+        if best_spread < orig_range * 0.01:
+            best_spread = orig_range * 0.1
+
+        half_range = best_spread * shrink_factor * 0.5
+        new_low = max(orig_low, best_mid - half_range)
+        new_high = min(orig_high, best_mid + half_range)
+
+        # Round for int params
+        if ptype == "int":
+            new_low = int(round(new_low))
+            new_high = int(round(new_high))
+            if new_high - new_low < 1:
+                new_low = max(orig_low, new_low - 1)
+                new_high = min(orig_high, new_high + 1)
+
+        # Ensure at least some range
+        if new_high <= new_low:
+            new_low = orig_low
+            new_high = orig_high
+
+        narrowed[name] = dict(spec)
+        narrowed[name]["low"] = new_low
+        narrowed[name]["high"] = new_high
+
+    return narrowed
+
+
+def run_hpo_hierarchical(
+    script: str,
+    n_trials: int = 50,
+    n_stage1: int | None = None,
+    n_jobs: int = 1,
+    study_name: str | None = None,
+    search_space: dict[str, dict[str, Any]] | None = None,
+    storage: str | None = None,
+    direction: str = "maximize",
+    objective_metric: str = "seg_total",
+    timeout_minutes: float | None = None,
+    distributed: bool = False,
+    queue: str | None = None,
+    project: str = "PDEBench",
+    loss: str | None = None,
+    top_frac: float = 0.2,
+    shrink_factor: float = 0.5,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Two-stage hierarchical hyperparameter optimization.
+
+    Phase 1 -- uniform random sampling (wide exploration, ~20% budget).
+    Phase 2 -- Optuna TPE with Hyperband pruner on narrowed space (~80% budget).
+
+    The combined result reflects the best trial across both phases.
+
+    Args:
+        script: Training script path.
+        n_trials: Total number of trials across both phases.
+        n_stage1: Number of trials for Phase 1 (default: max(5, n_trials // 5)).
+        n_jobs: Parallel execution count (local or distributed).
+        study_name: Optional study name override.
+        search_space: Hyperparameter search space (default: _DEFAULT_SEARCH_SPACE).
+        storage: Optuna storage URL (local mode only).
+        direction: Optimization direction ('maximize' or 'minimize').
+        objective_metric: Metric name to optimize.
+        timeout_minutes: Max runtime in minutes.
+        distributed: Use clearml ask/tell distribution.
+        queue: Queue for distributed trials.
+        project: ClearML project name.
+        loss: Loss function name passed to training script.
+        top_frac: Fraction of best trials used for space narrowing (default 0.2).
+        shrink_factor: Shrink multiplier for narrowed space (default 0.5).
+        **kwargs: Additional keyword arguments passed to both Phase run_hpo calls.
+
+    Returns:
+        Dict with merged results from both phases, including 'phase_1' and
+        'phase_2' sub-results.
+    """
+    ss = search_space or dict(_DEFAULT_SEARCH_SPACE)
+    if n_stage1 is None:
+        n_stage1 = max(5, n_trials // 5)
+    n_stage2 = n_trials - n_stage1
+
+    base_ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+    s1_name = study_name or f"hpo_s1_{base_ts}"
+    s2_name = study_name or f"hpo_s2_{base_ts}"
+
+    # Phase 1: uniform random, no pruner
+    phase1 = run_hpo(
+        script=script,
+        n_trials=n_stage1,
+        n_jobs=n_jobs,
+        study_name=s1_name,
+        search_space=ss,
+        storage=storage,
+        direction=direction,
+        objective_metric=objective_metric,
+        timeout_minutes=timeout_minutes,
+        distributed=distributed,
+        queue=queue,
+        project=project,
+        loss=loss,
+        pruner=None,
+        **kwargs,
+    )
+
+    # Build trial history for narrowing from phase1 result
+    phase1_trials: list[dict[str, Any]] = []
+    best_value = phase1.get("best_value")
+    best_params = phase1.get("best_params")
+    if best_value is not None and best_params is not None:
+        phase1_trials.append({"value": best_value, "params": best_params})
+
+    # Narrow search space
+    if phase1_trials and phase1.get("completed", 0) >= 2:
+        narrowed_ss = _narrow_space(
+            phase1_trials, ss, top_frac=top_frac, shrink_factor=shrink_factor
+        )
+    else:
+        narrowed_ss = dict(ss)
+
+    # Phase 2: TPE + Hyperband pruner on narrowed space
+    phase2 = run_hpo(
+        script=script,
+        n_trials=n_stage2,
+        n_jobs=n_jobs,
+        study_name=s2_name,
+        search_space=narrowed_ss,
+        storage=storage,
+        direction=direction,
+        objective_metric=objective_metric,
+        timeout_minutes=timeout_minutes,
+        distributed=distributed,
+        queue=queue,
+        project=project,
+        loss=loss,
+        pruner="hyperband",
+        **kwargs,
+    )
+
+    # Merge results -- pick the best across both phases
+    p1_best = phase1.get("best_value")
+    p2_best = phase2.get("best_value")
+
+    is_maximize = direction == "maximize"
+
+    if p1_best is not None and p2_best is not None:
+        if is_maximize:
+            use_phase1 = p1_best >= p2_best
+        else:
+            use_phase1 = p1_best <= p2_best
+    elif p1_best is not None:
+        use_phase1 = True
+    else:
+        use_phase1 = False
+
+    merged: dict[str, Any] = {
+        "study_name": study_name or f"hpo_merged_{base_ts}",
+        "n_trials": n_trials,
+        "completed": (phase1.get("completed", 0) or 0) + (phase2.get("completed", 0) or 0),
+        "failed": (phase1.get("failed", 0) or 0) + (phase2.get("failed", 0) or 0),
+        "best_value": (phase1 if use_phase1 else phase2).get("best_value"),
+        "best_params": (phase1 if use_phase1 else phase2).get("best_params"),
+        "direction": direction,
+        "duration_sec": (phase1.get("duration_sec", 0) or 0) + (phase2.get("duration_sec", 0) or 0),
+        "timeout_minutes": timeout_minutes,
+        "method": "hierarchical",
+        "phase_1": phase1,
+        "phase_2": phase2,
+    }
+    return merged
