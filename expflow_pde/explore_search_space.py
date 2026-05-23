@@ -74,8 +74,14 @@ Each maps to a training script / model class:
 - ``FNO_deep`` — Deep FNO (n_layers=6..8, width=64..128)
 - ``DeepONet`` — Standard DeepONet (branch=2..6 layers, trunk=2..6 layers)
 - ``DeepONet_wide`` — Wide DeepONet (width=128..256, for long-horizon)
-- ``PINO`` — FNO + PDE physics loss (weights 0.01..0.5)
-- ``PINN_MLP`` — Pure physics-informed MLP (Raissi-style, 4..8 layers)
+
+  .. note::
+     ``PINO`` and ``PINN_MLP`` are defined in ``ARCHITECTURES`` but are
+     **reserved for future use** — they have no corresponding training
+     script that accepts their CLI parameters.  Sampling them will fall
+     back to the default training script with default arguments.  To
+     enable them, add an entry to ``get_explore_objective()``\'s script
+     mapping with the appropriate CLI path.
 """
 
 
@@ -237,18 +243,24 @@ def suggest_loss(trial: Any) -> str:
 
 
 def get_explore_objective(
-    train_script: str | Callable | None = None,
+    train_script: str | Callable | dict[str, str | Callable] | None = None,
 ) -> Callable:
     """Return an Optuna-compatible objective for explore-mode HPO.
 
     The objective samples an architecture, its parameters, shared
-    training params, and a loss function, then runs the training
-    script and returns the metric value.
+    training params, and a loss function, then runs the appropriate
+    training script and returns the metric value.
 
     Args:
-        train_script: Path to training script, or a callable
-            ``f(params: dict) -> float``.  If None, returns a
-            *mock* objective for testing (returns a simulated score).
+        train_script: Path to training script, a callable
+            ``f(params: dict) -> float``, or a **dict mapping
+            architecture name → script path / callable**.
+            If a single string is given, it is used for **all**
+            architectures (the default).
+            If ``None``, returns a *mock* objective (for testing).
+
+            For architectures that map to a callable: the callable
+            receives the full sampled params dict.
 
     Returns:
         An ``objective(trial) -> float`` callable suitable for
@@ -259,13 +271,18 @@ def get_explore_objective(
         import optuna
         from expflow_pde.explore_search_space import get_explore_objective
 
-        study = optuna.create_study(direction="maximize")
+        # Single script (all archs)
         study.optimize(get_explore_objective("./train_task1.py"), n_trials=50)
+
+        # Per-architecture script mapping
+        study.optimize(get_explore_objective({
+            "FNO": "./train_fno.py",
+            "DeepONet": "./train_deeponet.py",
+        }), n_trials=50)
     """
     def _default_eval(params: dict[str, Any]) -> float:
         """Mock evaluation for testing — returns a synthetic score."""
         import math
-        # Fake score centred around 100 ± 30, skewed by param quality
         lr = params.get("lr", 1e-3)
         width = params.get("width", 64)
         n_modes = params.get("n_modes", 16)
@@ -275,25 +292,45 @@ def get_explore_objective(
             + 5.0 * (1.0 - math.exp(-n_modes / 16.0))
         return max(0.0, min(150.0, score))
 
+    # Resolve script mapping — default_eval or single-script code
     if train_script is None:
         fn: Callable = _default_eval
+        _script_map: dict[str, str | Callable] = {}
+    elif isinstance(train_script, dict):
+        _script_map = dict(train_script)
+        def _resolve_script(arch: str) -> Callable:
+            entry = _script_map.get(arch)
+            if entry is None:
+                # No mapping for this arch — fall back to mock
+                return _default_eval
+            if isinstance(entry, str):
+                def _run_script(params: dict[str, Any]) -> float:
+                    from expflow_pde.hpo import _run_trial_local
+                    metric = params.get("_metric", "seg_total")
+                    result = _run_trial_local(entry, params, objective_metric=metric)
+                    return result or 0.0
+                return _run_script
+            return entry  # callable
+        fn = _default_eval  # placeholder, resolved per-arch in objective
     elif isinstance(train_script, str):
+        _script_map = {}
         def fn(params: dict[str, Any]) -> float:
             from expflow_pde.hpo import _run_trial_local
             metric = params.get("_metric", "seg_total")
             result = _run_trial_local(train_script, params, objective_metric=metric)
             return result or 0.0
     else:
+        _script_map = {}
         fn = train_script
 
     def objective(trial: Any) -> float:
-        """Define-by-Run objective for explore-mode HPO.
-
-        Samples architecture, its specific params, shared params,
-        loss function, then evaluates.
-        """
-        # Decide what to try
+        """Define-by-Run objective for explore-mode HPO."""
         arch = trial.suggest_categorical("architecture", sorted(ARCHITECTURES))
+
+        # Resolve per-architecture eval function if script_map is available
+        eval_fn = fn
+        if _script_map:
+            eval_fn = _resolve_script(arch)
 
         # Shared params
         params: dict[str, Any] = {
@@ -334,13 +371,29 @@ def get_explore_objective(
             params.update(suggest_deeponet_params(trial))
             params["architecture"] = arch
         elif arch in ("PINO",):
+            # PINO: no dedicated training script yet — runs the default
+            # script with an informative warning. The params are still
+            # sampled so that when a script becomes available, the
+            # history is compatible.
             params.update(suggest_pino_params(trial))
             params["architecture"] = "PINO"
+            import warnings as _w
+            _w.warn(
+                "PINO architecture sampled but no dedicated training "
+                "script is configured. Falling back to default script.",
+                RuntimeWarning,
+            )
         elif arch in ("PINN_MLP",):
             params.update(suggest_pinn_mlp_params(trial))
             params["architecture"] = "PINN_MLP"
+            import warnings as _w
+            _w.warn(
+                "PINN_MLP architecture sampled but no dedicated training "
+                "script is configured. Falling back to default script.",
+                RuntimeWarning,
+            )
 
-        return fn(params)
+        return eval_fn(params)
 
     return objective
 

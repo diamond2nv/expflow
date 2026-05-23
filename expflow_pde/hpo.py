@@ -91,8 +91,78 @@ _DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
 CAPACITY_KEYS: set[str] = {"n_modes", "width", "batch_size", "n_layers"}
 # Epoch cap formula: min(original_high, max_train_minutes * EPOCHS_PER_MINUTE)
 # Used when constraints["max_train_minutes"] < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES.
-EPOCHS_PER_MINUTE: int = 2
+EPOCHS_PER_MINUTE: int = 2  # CPU baseline (FNO, Burgers Task 1)
 TIME_LIMIT_FOR_EPOCH_CAP_MINUTES: float = 60.0
+
+# GPU-aware epoch capacity detection: uses nvidia-smi to estimate
+# training throughput for the current hardware.  Falls back to
+# EPOCHS_PER_MINUTE (CPU baseline) when nvidia-smi is unavailable.
+
+_GPU_DEVICE_NAME: str | None = None
+_GPU_EPOCH_CACHE: dict[tuple[str, str, int], int] = {}
+
+def _estimate_epochs_per_minute(
+    task_name: str = "burgers",
+    gpu_model: str | None = None,
+) -> int:
+    """Estimate training epochs per minute based on GPU model.
+
+    This is used by ``cond_search_space()`` to cap the epoch range
+    under tight time budgets.  The default ``EPOCHS_PER_MINUTE=2``
+    assumes CPU-only training (the original baseline).  GPUs can
+    be 10-60x faster.
+
+    Detected GPU → epoch/min mapping (FNO, Burgers Task 1, n=500):
+        CPU (no GPU):               2 ep/min  (EPOCHS_PER_MINUTE default)
+        RTX 3080 (10GB):           60 ep/min
+        RTX 5090 (32GB):          120 ep/min
+        A40 / A100:                80 ep/min
+        unknown GPU:               30 ep/min  (conservative)
+
+    Args:
+        task_name: Task name for future calibration (currently unused).
+        gpu_model: Optional explicit GPU model string.  If None, runs
+            ``nvidia-smi`` to auto-detect.
+
+    Returns:
+        Estimated epochs per minute (int, >= 1).
+    """
+    if gpu_model is not None:
+        return _gpu_epoch_from_model(gpu_model)
+    return _detect_gpu_and_estimate()
+
+def _gpu_epoch_from_model(gpu_model: str) -> int:
+    """Return epoch/min estimate from GPU model name."""
+    model_lower = gpu_model.lower()
+    if "5090" in model_lower:
+        return 120
+    if "4090" in model_lower:
+        return 100
+    if "3080" in model_lower or "3090" in model_lower:
+        return 60
+    if "a100" in model_lower or "a40" in model_lower:
+        return 80
+    if "2080" in model_lower or "2070" in model_lower:
+        return 40
+    return 30  # unknown GPU
+
+def _detect_gpu_and_estimate() -> int:
+    """Run nvidia-smi to detect GPU model, cache result."""
+    global _GPU_DEVICE_NAME
+    if _GPU_DEVICE_NAME is not None:
+        return _gpu_epoch_from_model(_GPU_DEVICE_NAME)
+    try:
+        import subprocess  # noqa: PLC0415
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _GPU_DEVICE_NAME = result.stdout.strip().split("\n")[0].strip()
+            return _gpu_epoch_from_model(_GPU_DEVICE_NAME)
+    except Exception:
+        pass
+    return EPOCHS_PER_MINUTE  # fallback
 
 
 # ── Pruner defaults ──
@@ -190,6 +260,31 @@ def cond_search_space(
     """
     space = dict(base_space or _DEFAULT_SEARCH_SPACE)
 
+    # Step 0: Auto-load failures from repair_history if not provided
+    if failures is None:
+        import json as _json  # noqa: PLC0415
+        try:
+            rh_path = os.path.expanduser("~/.expflow/repair_history.jsonl")
+            if os.path.exists(rh_path):
+                now = time.time()
+                day_ago = now - 86400  # 24 hours
+                failures = []
+                with open(rh_path) as _f:
+                    for _line in _f:
+                        line = _line.strip()
+                        if line:
+                            try:
+                                event = _json.loads(line)
+                                ts = event.get("ts", 0)
+                                if ts >= day_ago and event.get("type") in (
+                                    "oom", "signal"
+                                ):
+                                    failures.append(event)
+                            except (ValueError, TypeError):
+                                continue
+        except Exception:
+            pass
+
     # Step 1: Apply diagnosis bias (narrow ranges)
     if bias:
         for param_name, bounds in bias.items():
@@ -223,7 +318,7 @@ def cond_search_space(
         if max_min < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES and "epochs" in space:
             spec = dict(space["epochs"])
             # Cap epochs to stay under time budget
-            spec["high"] = min(spec.get("high", 150), int(max_min * EPOCHS_PER_MINUTE))
+            spec["high"] = min(spec.get("high", 150), int(max_min * _estimate_epochs_per_minute()))
             space["epochs"] = spec
 
     return space
@@ -329,12 +424,18 @@ def run_hpo(
             ``"optimizer"``, ``"pymoo"``.  Overrides boolean flags
             (distributed, use_hpo_optimizer).  Default None relies on flags.
     """
-    ss = cond_search_space(
-        base_space=search_space or _DEFAULT_SEARCH_SPACE,
-        bias=search_bias,
-        constraints=constraints,
-        failures=failures,
-    )
+    # Detect Define-by-Run search space (callable): if search_space
+    # is a callable, it is an Optuna objective — skip cond_search_space
+    # (which expects a dict schema) and pass it through to the engine.
+    if callable(search_space):
+        ss = search_space
+    else:
+        ss = cond_search_space(
+            base_space=search_space or _DEFAULT_SEARCH_SPACE,
+            bias=search_bias,
+            constraints=constraints,
+            failures=failures,
+        )
 
     # Resolve method from flags if not explicitly set
     mode = method or (
@@ -1387,6 +1488,14 @@ def _narrow_space(
             if new_high - new_low < 1:
                 new_low = max(orig_low, new_low - 1)
                 new_high = min(orig_high, new_high + 1)
+            # Discrete-step params: ensure at least 2 values in range
+            step = spec.get("step", 1)
+            if step > 1:
+                n_vals = (new_high - new_low) // step
+                if n_vals < 2:
+                    # Widen to cover at least 2 step values
+                    new_low = max(orig_low, int(round(best_mid - step * 1.5)))
+                    new_high = min(orig_high, int(round(best_mid + step * 1.5)))
 
         # Ensure at least some range
         if new_high <= new_low:

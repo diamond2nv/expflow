@@ -237,8 +237,6 @@ class CompetitionController:
             "per_task_max_hours": self._per_task_max_hours,
             "task_time": dict(self._task_time),
         }
-
-    def save(self, extra: dict[str, Any] | None = None) -> None:
         """Persist state via GoalOrchestrator.save()."""
         from expflow_pde.goal_orchestrator import save as _g_save  # noqa: PLC0415
         state = self.to_dict()
