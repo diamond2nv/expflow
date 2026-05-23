@@ -660,11 +660,12 @@ def _run_hpo_optimizer(
                 )
             )
         elif ptype == "categorical":
+            from clearml.automation import DiscreteParameterRange
+
             hpo_params.append(
-                UniformParameterRange(
+                DiscreteParameterRange(
                     f"{param_prefix}{name}",
-                    min_value=0,
-                    max_value=len(spec["choices"]) - 1,
+                    values=spec["choices"],
                 )
             )
 
