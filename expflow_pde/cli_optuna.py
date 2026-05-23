@@ -82,8 +82,17 @@ def get_study_cmd(
         "-s",
         help="Database URL",
     ),
+    trials: bool = typer.Option(
+        False,
+        "--trials",
+        "-t",
+        help="Show detailed trial list",
+    ),
 ) -> None:
-    """Show details for a study."""
+    """Show details for a study.
+
+    Use --trials to list all trials in a compact table.
+    """
     from expflow_pde.optuna import get_study
 
     s = get_study(study_name, storage=storage)
@@ -93,9 +102,31 @@ def get_study_cmd(
     if s["best_trial"]:
         bt = s["best_trial"]
         print(f"Best Trial #{bt['number']}: value={bt['value']}")
+        if "values" in bt and len(bt["values"] or []) > 1:
+            for i, v in enumerate(bt["values"]):
+                print(f"  Obj{i + 1}: {v}")
         for k, v in bt["params"].items():
             print(f"  {k}: {v}")
-    print(f"Trials: {len(s['trials'])}")
+    total = len(s["trials"])
+    complete = sum(1 for t in s["trials"] if t.get("state") in ("COMPLETE", "State(1)"))
+    running = sum(1 for t in s["trials"] if t.get("state") in ("RUNNING", "State(0)"))
+    failed_n = sum(
+        1 for t in s["trials"] if t.get("state") in ("FAIL", "PRUNED", "State(2)", "State(3)")
+    )
+    print(f"Trials: {total} ({complete} done, {running} running, {failed_n} failed)")
+
+    if trials and s["trials"]:
+        print()
+        print(f"  {'Trial #':>8} {'Value':>10} {'State':>12} {'Duration':>10}  Params")
+        print(f"  {'-' * 8:>8} {'-' * 10:>10} {'-' * 12:>12} {'-' * 10:>10}  {'-' * 30}")
+        for t in sorted(s["trials"], key=lambda x: x["number"]):
+            val = t.get("value")
+            val_str = f"{val:.4f}" if val is not None else "N/A"
+            state = str(t.get("state", "?"))[:10]
+            dur = t.get("duration_sec")
+            dur_str = f"{dur:.0f}s" if dur is not None else "N/A"
+            params_str = ", ".join(f"{k}={v}" for k, v in list(t.get("params", {}).items())[:3])
+            print(f"  {t['number']:>8} {val_str:>10} {state:>12} {dur_str:>10}  {params_str}")
 
 
 @optuna_app.command("delete-study")

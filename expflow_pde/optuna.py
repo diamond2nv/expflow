@@ -101,13 +101,26 @@ def get_study(
 
     trials = []
     for t in study.trials:
-        trials.append(
-            {
-                "number": t.number,
-                "params": t.params,
-                "value": t.value,
-            }
-        )
+        trial_dict: dict[str, Any] = {
+            "number": t.number,
+            "params": t.params,
+            "value": t.value,
+            "values": t.values,
+            "state": str(t.state) if hasattr(t, "state") else "UNKNOWN",
+        }
+        # Add datetime info if available (Optuna 3.x+)
+        if hasattr(t, "datetime_start") and t.datetime_start is not None:
+            trial_dict["datetime_start"] = t.datetime_start.isoformat()
+        if hasattr(t, "datetime_complete") and t.datetime_complete is not None:
+            trial_dict["datetime_complete"] = t.datetime_complete.isoformat()
+        if (
+            hasattr(t, "datetime_start")
+            and hasattr(t, "datetime_complete")
+            and t.datetime_start is not None
+            and t.datetime_complete is not None
+        ):
+            trial_dict["duration_sec"] = (t.datetime_complete - t.datetime_start).total_seconds()
+        trials.append(trial_dict)
 
     return {
         "study_id": study._study_id,
