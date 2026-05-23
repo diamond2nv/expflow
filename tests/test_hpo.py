@@ -798,3 +798,236 @@ class TestHierarchicalNarrowing:
 
         # _narrow_space should NOT be called (fewer than 3 trials from fallback too)
         mock_narrow.assert_not_called()
+
+
+# ── Tests: _should_early_stop ──
+
+
+class TestShouldEarlyStop:
+    """Tests for _should_early_stop — intermediate scalar threshold check."""
+
+    def _make_task(self, scalars: list[tuple[float, float]] | None = None):
+        """Create a mock clearml Task with get_reported_scalars."""
+        task = MagicMock()
+        if scalars is not None:
+            task.get_reported_scalars.return_value = scalars
+        else:
+            task.get_reported_scalars.return_value = []
+        task.stop = MagicMock()
+        return task
+
+    def test_no_threshold_returns_false(self):
+        """Without threshold, should never stop."""
+        from expflow_pde.hpo import _should_early_stop
+
+        task = self._make_task()
+        assert not _should_early_stop(task, "seg_total", threshold=None)
+
+    def test_few_reports_returns_false(self):
+        """With fewer than min_reports, should not stop."""
+        from expflow_pde.hpo import _should_early_stop
+
+        task = self._make_task([(1, 10.0), (2, 12.0), (3, 11.0)])
+        assert not _should_early_stop(task, "seg_total", threshold=15.0, min_reports=10)
+
+    def test_below_threshold_returns_true(self):
+        """When all recent values are below threshold, should stop."""
+        from expflow_pde.hpo import _should_early_stop
+
+        # 12 reports, all below 20
+        scalars = [(float(i), float(10 + (i % 5))) for i in range(12)]
+        task = self._make_task(scalars)
+        assert _should_early_stop(task, "seg_total", threshold=15.0, min_reports=5, recent_n=3)
+
+    def test_above_threshold_returns_false(self):
+        """When recent values are above threshold, should not stop."""
+        from expflow_pde.hpo import _should_early_stop
+
+        # 12 reports, values ramp from 5 to 28
+        scalars = [(float(i), float(5 + i * 2)) for i in range(12)]
+        task = self._make_task(scalars)
+        # Recent 3 values: 23, 25, 27 — all above 20, so should NOT early-stop
+        assert not _should_early_stop(task, "seg_total", threshold=20.0, min_reports=5, recent_n=3)
+
+    def test_exception_graceful(self):
+        """If get_reported_scalars raises, should return False."""
+        from expflow_pde.hpo import _should_early_stop
+
+        task = self._make_task()
+        task.get_reported_scalars.side_effect = RuntimeError("clearml network")
+        assert not _should_early_stop(task, "seg_total", threshold=10.0)
+
+    def test_resolve_metric_title_series_simple(self):
+        """Simple metric name resolves to (name, name)."""
+        from expflow_pde.hpo import _resolve_metric_title_series
+
+        title, series = _resolve_metric_title_series("seg_total")
+        assert title == "seg_total"
+        assert series == "seg_total"
+
+    def test_resolve_metric_title_series_dot_notation(self):
+        """Score/seg_total resolves to (Score, seg_total)."""
+        from expflow_pde.hpo import _resolve_metric_title_series
+
+        title, series = _resolve_metric_title_series("Score/seg_total")
+        assert title == "Score"
+        assert series == "seg_total"
+
+
+# ── Tests: _collect_one_trial with early stop ──
+
+
+class TestCollectOneTrialEarlyStop:
+    """Tests for _collect_one_trial with early_stop_threshold."""
+
+    def _make_pending(self, n=1, status="running"):
+        """Create pending trials with mock tasks in the given status."""
+        pending = []
+        for i in range(n):
+            trial = MagicMock()
+            trial.number = i
+            params = {"lr": 0.001, "epochs": 80}
+            task = MagicMock()
+            task.get_reported_scalars.return_value = [(0.0, 5.0), (1.0, 6.0)]  # below threshold
+            task.stop = MagicMock()
+            pending.append((trial, params, task))
+        return pending
+
+    def test_early_stop_triggers_stop_on_running(self):
+        """Running task below threshold should call task.stop()."""
+        from expflow_pde.hpo import _collect_one_trial
+
+        study = MagicMock()
+        optuna = MagicMock()
+        task = MagicMock()
+        task.get_reported_scalars.return_value = [(0.0, 3.0), (1.0, 4.0)]
+        task.status = "running"
+
+        # Make stop() clear the pending list so the loop exits
+        pending_global = [(MagicMock(), {"lr": 0.001}, task)]
+
+        def _stop_and_clear():
+            pending_global.clear()
+
+        task.stop = MagicMock(side_effect=_stop_and_clear)
+
+        with patch("expflow_pde.hpo.time.sleep"):
+            result = _collect_one_trial(
+                study,
+                pending_global,
+                objective_metric="seg_total",
+                direction="maximize",
+                optuna=optuna,
+                early_stop_threshold=5.0,
+                early_stop_min_reports=1,
+            )
+
+        # stop() was called, then pending was cleared -> loop exits -> None result
+        task.stop.assert_called_once()
+        assert result is None
+
+    def test_early_stop_no_action_when_above_threshold(self):
+        """Running task above threshold should not call task.stop()."""
+        from expflow_pde.hpo import _collect_one_trial
+
+        study = MagicMock()
+        optuna = MagicMock()
+
+        task = MagicMock()
+        task.get_reported_scalars.return_value = [(0.0, 90.0), (1.0, 95.0)]
+        task.status = "running"
+        task.stop = MagicMock()
+
+        pending = [(MagicMock(), {"lr": 0.001}, task)]
+
+        with patch("expflow_pde.hpo.time.sleep"):
+            result = _collect_one_trial(
+                study,
+                pending,
+                objective_metric="seg_total",
+                direction="maximize",
+                optuna=optuna,
+                early_stop_threshold=50.0,  # 90 > 50, should NOT stop
+                early_stop_min_reports=1,
+                timeout_minutes=0.01,  # short timeout to exit loop
+                poll_interval=0.01,
+            )
+
+        # stop() should NOT have been called (values above threshold)
+        task.stop.assert_not_called()
+        # Timeout -> result is None
+        assert result is None
+
+    def test_early_stop_skipped_for_completed(self):
+        """Completed tasks should not be early-stopped, just collected."""
+        from expflow_pde.hpo import _collect_one_trial
+
+        study = MagicMock()
+        optuna = MagicMock()
+        task = MagicMock()
+        task.status = "completed"
+        task.stop = MagicMock()
+
+        pending = [(MagicMock(), {"lr": 0.001}, task)]
+
+        with (
+            patch("expflow_pde.hpo.time.sleep"),
+            patch(
+                "expflow_pde.hpo._extract_metrics_from_task",
+                return_value=[57.0],
+            ),
+        ):
+            result = _collect_one_trial(
+                study,
+                pending,
+                objective_metric="seg_total",
+                direction="maximize",
+                optuna=optuna,
+                early_stop_threshold=10.0,
+            )
+
+        assert result == (1, 0)  # completed successfully
+
+    def test_early_stop_with_multiple_pending(self):
+        """Should check all pending tasks, not just the first."""
+        from expflow_pde.hpo import _collect_one_trial
+
+        study = MagicMock()
+        optuna = MagicMock()
+
+        # Two tasks: one above threshold, one below
+        # Build tasks manually with dynamic status for the bad one
+        task_good = MagicMock()
+        task_good.get_reported_scalars.return_value = [(0.0, 90.0), (1.0, 95.0)]
+        task_good.status = "running"
+        task_good.stop = MagicMock()
+
+        # Bad task: stop() clears the pending list
+        task_bad = MagicMock()
+        task_bad.get_reported_scalars.return_value = [(0.0, 3.0), (1.0, 4.0)]
+        task_bad.status = "running"
+
+        pending_list = [
+            (MagicMock(), {"lr": 0.001}, task_good),
+            (MagicMock(), {"lr": 0.001}, task_bad),
+        ]
+
+        def _stop_bad_and_clear():
+            pending_list.clear()
+
+        task_bad.stop = MagicMock(side_effect=_stop_bad_and_clear)
+
+        with patch("expflow_pde.hpo.time.sleep"):
+            _collect_one_trial(
+                study,
+                pending_list,
+                objective_metric="seg_total",
+                direction="maximize",
+                optuna=optuna,
+                early_stop_threshold=10.0,
+                early_stop_min_reports=1,
+            )
+
+        # Good task should NOT be stopped, bad task should be stopped
+        task_good.stop.assert_not_called()
+        task_bad.stop.assert_called_once()

@@ -211,6 +211,8 @@ def run_hpo(
     failures: list[dict[str, Any]] | None = None,
     use_combined_score: bool = False,
     param_prefix: str = "Args/",
+    early_stop_threshold: float | None = None,
+    early_stop_min_reports: int = 10,
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -223,6 +225,9 @@ def run_hpo(
     objective_metric as a list of metric names. Example:
         run_hpo(..., direction=["maximize", "minimize"],
                 objective_metric=["seg_total", "train_time_minutes"])
+
+    When ``early_stop_threshold`` is set (distributed mode), trials whose
+    intermediate scalar values fall below the threshold are stopped early.
 
     Args:
         ...
@@ -270,6 +275,8 @@ def run_hpo(
             loss=loss,
             use_combined_score=use_combined_score,
             param_prefix=param_prefix,
+            early_stop_threshold=early_stop_threshold,
+            early_stop_min_reports=early_stop_min_reports,
         )
 
     return _run_hpo_local(
@@ -385,10 +392,14 @@ def _run_hpo_distributed(
     loss: str | None = None,
     use_combined_score: bool = False,
     param_prefix: str = "Args/",
+    early_stop_threshold: float | None = None,
+    early_stop_min_reports: int = 10,
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode).
 
     Supports multi-objective: pass direction as a list, objective_metric as a list.
+    When ``early_stop_threshold`` is set, underperforming trials are stopped early
+    by checking intermediate scalars during polling.
     """
     from clearml import Task
 
@@ -461,6 +472,8 @@ def _run_hpo_distributed(
                 optuna,
                 use_combined_score=use_combined_score,
                 timeout_minutes=timeout_minutes,
+                early_stop_threshold=early_stop_threshold,
+                early_stop_min_reports=early_stop_min_reports,
             )
             if collected is not None:
                 c, f = collected
@@ -476,6 +489,8 @@ def _run_hpo_distributed(
             optuna,
             use_combined_score=use_combined_score,
             timeout_minutes=timeout_minutes,
+            early_stop_threshold=early_stop_threshold,
+            early_stop_min_reports=early_stop_min_reports,
         )
         if collected is not None:
             c, f = collected
@@ -490,6 +505,69 @@ def _run_hpo_distributed(
     )
 
 
+def _should_early_stop(
+    task: Any,
+    metric_name: str,
+    threshold: float | None = None,
+    min_reports: int = 10,
+    recent_n: int = 5,
+) -> bool:
+    """Check if a running clearml task should be stopped early.
+
+    Reads the task's reported scalars for ``metric_name`` (fuzzy match).
+    If at least ``min_reports`` values have been reported and the max of
+    the most recent ``recent_n`` is below ``threshold``, returns True.
+
+    Args:
+        task: clearml Task object.
+        metric_name: Metric name to check (e.g. ``seg_total``).
+        threshold: Early-stop threshold. If the recent max is below this,
+            the task should be stopped. None means no early stopping.
+        min_reports: Minimum number of scalar reports required before
+            checking (default 10). Prevents premature stopping.
+        recent_n: Number of most recent values to consider (default 5).
+
+    Returns:
+        True if the task should be stopped, False otherwise.
+    """
+    if threshold is None:
+        return False
+
+    try:
+        # get_reported_scalars returns Iterable[tuple[float, float]]
+        # where each tuple is (iteration, value)
+        full_name = _resolve_metric_title_series(metric_name)
+        reported = task.get_reported_scalars(*full_name)
+    except Exception:
+        return False
+
+    values: list[float] = []
+    for v in list(reported or []):
+        try:
+            pair = (v[0], v[1]) if isinstance(v, (list, tuple)) else (0, float(v))
+            values.append(pair[1])
+        except (TypeError, ValueError):
+            continue
+
+    if len(values) < min_reports:
+        return False
+
+    recent = values[-recent_n:]
+    return max(recent) < threshold
+
+
+def _resolve_metric_title_series(metric_name: str) -> tuple[str, str]:
+    """Resolve a dot-notation metric name into (title, series).
+
+    E.g. ``Score/seg_total`` -> (``Score``, ``seg_total``).
+          ``seg_total`` -> (``seg_total``, ``seg_total``).
+    """
+    parts = metric_name.split("/", 1)
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return (metric_name, metric_name)
+
+
 def _collect_one_trial(
     study: Any,
     pending: list[tuple[Any, dict[str, Any], Any]],
@@ -499,17 +577,24 @@ def _collect_one_trial(
     poll_interval: float = 5.0,
     timeout_minutes: float | None = 60.0,
     use_combined_score: bool = False,
+    early_stop_threshold: float | None = None,
+    early_stop_min_reports: int = 10,
 ) -> tuple[int, int] | None:
     """Wait for one pending trial to complete and report its result.
 
     Supports both single and multi-objective. For multi-objective, returns
     a list of values extracted from each metric name in ``objective_metric``.
+
+    When ``early_stop_threshold`` is set, periodically checks intermediate
+    scalars and stops underperforming trials early.
     """
     if not pending:
         return None
 
     multi = isinstance(direction, list)
     metrics = objective_metric if multi else [objective_metric]
+    # Primary metric for early stop (use first metric)
+    primary_metric: str = metrics[0] if metrics else objective_metric  # type: ignore[assignment]
 
     start = time.time()
     timeout_sec = (timeout_minutes or 60.0) * 60
@@ -542,6 +627,19 @@ def _collect_one_trial(
                         trial=trial_obj, values=_failed_value(direction[0] if multi else direction)
                     )
                     return (0, 1)
+            elif (
+                early_stop_threshold is not None
+                and status == "running"
+                and _should_early_stop(
+                    task,
+                    primary_metric,
+                    threshold=early_stop_threshold,
+                    min_reports=early_stop_min_reports,
+                )
+            ):
+                # Early stop this underperforming trial
+                task.stop()
+                # It will be picked up in a future poll as "stopped"
         time.sleep(poll_interval)
     return None
 
