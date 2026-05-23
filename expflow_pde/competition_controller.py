@@ -118,6 +118,96 @@ class CompetitionController:
             return True
         return False
 
+    # ── Time-aware decision (replaces hardcoded stop_count >= 3) ──
+
+    def decide_next_action(
+        self,
+        current_score: float | None = None,
+        history: list[float] | None = None,
+        pipeline_time_estimate_minutes: float = 15.0,
+        min_gain: float = 0.5,
+    ) -> str:
+        """Decide whether to continue iterating or submit, using a simple
+        Bayesian expected-gain estimate that accounts for remaining time
+        budget.
+
+        This replaces the hardcoded "stop after N consecutive no-improvement"
+        rule with a time-aware decision: if the expected score gain from
+        another pipeline iteration is below ``min_gain``, or remaining time
+        is insufficient for another full iteration, it returns ``"submit"``
+        instead of ``"continue"``.
+
+        Args:
+            current_score: Current best score.  ``None`` means no score yet
+                (always continue if time permits).
+            history: Past score history for estimating success rate and
+                average gain.  ``None`` or fewer than 2 entries → 50% prior.
+            pipeline_time_estimate_minutes: Expected wall-clock time for
+                one complete pipeline submit → wait → score cycle (default
+                15 minutes).
+            min_gain: Minimum expected score gain to justify another
+                iteration (default 0.5).  Below this, submit immediately.
+
+        Returns:
+            One of ``"continue"``, ``"submit"``, ``"emergency"``,
+            ``"pause"``.
+
+            ``"emergency"`` — deadline passed or per-task limit exceeded.
+            ``"pause"`` — GPU queue congestion.
+            ``"submit"`` — expected gain too low, or insufficient time left.
+            ``"continue"`` — another iteration is worth the time investment.
+        """
+        # ── Emergency checks (highest priority) ──
+        if self.check_deadline():
+            return "emergency"
+        if self._mode == "sprint":
+            current = self.get_current_task() or "task1"
+            if not self.check_per_task_limit(current):
+                return "submit"
+
+        # ── No score yet — always continue (need at least one result) ──
+        if current_score is None:
+            return "continue"
+
+        # ── Queue congestion check ──
+        try:
+            qd = self.check_queue_depth("default")
+            if qd.get("pending", 0) > 0:
+                return "pause"
+        except Exception:
+            pass
+
+        # ── Estimate remaining time budget ──
+        remaining = self.remaining_days() * 24.0 * 60.0  # days → minutes
+        if self._mode == "sprint":
+            task_name = self.get_current_task() or "task1"
+            used_min = self._task_time.get(task_name, 0.0) * 60.0
+            max_min = self._per_task_max_hours * 60.0
+            remaining = min(remaining, max_min - used_min)
+
+        # Not enough time for another full iteration → submit now
+        if remaining < pipeline_time_estimate_minutes:
+            return "submit"
+
+        # ── Bayesian expected-gain estimation ──
+        if history and len(history) >= 2:
+            # Success = improvement > 0.5 in any single step
+            improvements = [history[i] - history[i - 1] for i in range(1, len(history))]
+            successes = sum(1 for g in improvements if g > 0.5)
+            p_success = successes / len(improvements)
+            # Average gain on successful steps
+            gains = [g for g in improvements if g > 0.5]
+            avg_gain = sum(gains) / len(gains) if gains else 0.0
+        else:
+            p_success = 0.5
+            avg_gain = 2.0  # conservative default
+
+        expected_gain = p_success * avg_gain
+
+        if expected_gain >= min_gain:
+            return "continue"
+        return "submit"
+
     # ── Task scheduling ──
 
     def complete_task(self, task_name: str) -> str | None:

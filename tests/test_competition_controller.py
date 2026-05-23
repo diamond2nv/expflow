@@ -147,3 +147,108 @@ def test_parse_deadline_fractional_seconds():
     assert dt is not None
     offset = dt.tzinfo.utcoffset(dt)
     assert offset.total_seconds() == 0
+
+
+# ── decide_next_action tests ──
+
+
+class TestDecideNextAction:
+    """Tests for CompetitionController.decide_next_action()."""
+
+    def _make_ctrl(self, mode="explore", task_time_hours=None):
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        ctrl = CompetitionController(
+            session_id="test_action",
+            mode=mode,
+            deadline=future,
+            per_task_max_hours=12,
+        )
+        if task_time_hours:
+            for task, hours in task_time_hours.items():
+                ctrl.record_task_time(task, hours)
+        return ctrl
+
+    def test_no_score_continues(self):
+        ctrl = self._make_ctrl()
+        assert ctrl.decide_next_action(current_score=None) == "continue"
+
+    def test_deadline_passed_emergency(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        ctrl = CompetitionController(session_id="t_dead", deadline=past)
+        assert ctrl.decide_next_action(current_score=50.0) == "emergency"
+
+    def test_sprint_limit_exceeded_submit(self):
+        ctrl = CompetitionController(
+            session_id="t_sprint",
+            mode="sprint",
+            deadline=(datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+            per_task_max_hours=12,
+            task_order=["task1"],  # only one task — no fallback
+        )
+        ctrl.record_task_time("task1", 13)
+        # task1 exceeded per-task limit, and it's the only task → submit
+        assert ctrl.decide_next_action(current_score=100.0) == "submit"
+
+    def test_queue_pending_pause(self):
+        ctrl = self._make_ctrl()
+        original = ctrl.check_queue_depth
+        ctrl.check_queue_depth = lambda _q: {"running": 1, "pending": 1, "total": 2}
+        try:
+            assert ctrl.decide_next_action(current_score=50.0) == "pause"
+        finally:
+            ctrl.check_queue_depth = original
+
+    def test_strong_history_continues(self):
+        ctrl = self._make_ctrl()
+        history = [100.0, 105.0, 112.0]
+        assert (
+            ctrl.decide_next_action(
+                current_score=112.0, history=history,
+                pipeline_time_estimate_minutes=5.0, min_gain=0.5,
+            )
+            == "continue"
+        )
+
+    def test_weak_history_submits(self):
+        ctrl = self._make_ctrl()
+        history = [100.0, 99.0, 98.0]
+        assert (
+            ctrl.decide_next_action(
+                current_score=98.0, history=history,
+                pipeline_time_estimate_minutes=5.0, min_gain=0.5,
+            )
+            == "submit"
+        )
+
+    def test_insufficient_time_submits(self):
+        ctrl = self._make_ctrl()
+        original = ctrl.remaining_days
+        ctrl.remaining_days = lambda: 0.001 / (24 * 60)
+        try:
+            assert (
+                ctrl.decide_next_action(
+                    current_score=100.0, history=[95.0, 100.0],
+                    pipeline_time_estimate_minutes=5.0,
+                )
+                == "submit"
+            )
+        finally:
+            ctrl.remaining_days = original
+
+    def test_empty_history_default_continue(self):
+        ctrl = self._make_ctrl()
+        assert (
+            ctrl.decide_next_action(
+                current_score=50.0, history=None,
+                pipeline_time_estimate_minutes=60.0,
+            )
+            == "continue"
+        )
+
+    def test_explore_mode_loose_time(self):
+        ctrl = self._make_ctrl(mode="explore", task_time_hours={"task1": 100})
+        result = ctrl.decide_next_action(
+            current_score=50.0, history=[40.0, 50.0],
+            pipeline_time_estimate_minutes=5.0,
+        )
+        assert result in ("continue", "submit")
