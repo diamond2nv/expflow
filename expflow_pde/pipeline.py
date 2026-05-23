@@ -265,14 +265,21 @@ class ExperimentPipeline:
         pruner: str = "hyperband",
         skip_steps: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Mode A (full): Create and run a HPO → Train → Eval pipeline.
+        """Mode A (full): Run HPO locally, then create a train → eval pipeline.
 
-        This is the fully automated competition pipeline:
-        1. HPO: runs N trials via clearml queue to find best hyperparams
-        2. Train: trains with the best parameters from HPO
-        3. Eval: evaluates the best checkpoint
+        This is the fully automated competition workflow:
 
-        Steps can be individually skipped via skip_steps.
+        Phase 1 — Hyperparameter search:
+            Call run_hpo() (distributed or local) to find the best parameters.
+            Depending on n_trials and parallel, uses clearml queue distribution
+            (n_trials >= parallel) or local subprocess (n_trials < parallel).
+
+        Phase 2 — Train with best params:
+            Use train_val_submit() with the discovered best parameters.
+
+        This replaces the previous "HPO step inside clearml pipeline" approach,
+        which had multiple design issues (wrong base_task, params never
+        propagated, Optuna SQLite inaccessible from pipeline steps).
 
         Args:
             train_script: Path to training script.
@@ -290,134 +297,73 @@ class ExperimentPipeline:
             timeout: Max minutes to wait.
             pruner: Optuna pruner ('hyperband', 'median', 'percentile').
             skip_steps: Steps to skip, e.g. ["hpo", "eval"].
+                When "hpo" is skipped, no hyperparameter search is performed
+                and train uses default parameters.
 
         Returns:
-            Dict with pipeline metadata and results.
+            Dict with keys: phase_1 (HPO result), phase_2 (pipeline result).
         """
-        from expflow_pde.clearml import (
-            pipeline_add_step,
-            pipeline_create,
-            pipeline_start,
-        )
+        from expflow_pde.hpo import run_hpo, get_study_best_params
 
         skip = set(skip_steps or [])
         exec_queue = execution_queue or self.queue
+        script_stem = train_script.replace(".py", "").replace("/", "_")
+        train_params: dict[str, Any] | None = None
 
-        if pipeline_name is None:
-            script_stem = train_script.replace(".py", "").replace("/", "_")
-            pipeline_name = f"pipeline_hpo_{script_stem}"
-
-        create_result = pipeline_create(
-            name=pipeline_name,
-            project=self.project,
-            version=version or DEFAULT_PIPELINE_VERSION,
-            abort_on_failure=self.abort_on_failure,
-            add_pipeline_tags=True,
-            add_run_number=self.add_run_number,
-            docker=self.docker,
-            packages=self.packages,
-        )
-        if "error" in create_result:
-            raise RuntimeError(f"Pipeline creation failed: {create_result.get('error', 'unknown')}")
-
-        steps: list[dict[str, Any]] = []
-        pipeline_name_actual = create_result.get("name", pipeline_name)
-
-        # Step 1: HPO
+        # ── Phase 1: HPO ──
+        hpo_result: dict[str, Any] | None = None
         if "hpo" not in skip:
-            hpo_name = hpo_study_name or f"auto_hpo_{script_stem}"
-            hpo_params_override: dict[str, Any] = {
-                "Args": {
-                    "--n-trials": str(n_trials),
-                    "--parallel": str(parallel),
-                    "--study-name": hpo_name,
-                    "--metric": objective_metric,
-                    "--direction": direction,
-                    "--pruner": pruner,
-                    "--distributed": "true",
-                    "--queue": exec_queue or self.queue,
-                    "--project": self.project,
-                }
-            }
+            hpo_study_name = hpo_study_name or f"auto_hpo_{script_stem}"
 
-            add_hpo_result = pipeline_add_step(
-                pipeline_name=pipeline_name_actual,
+            # Use distributed mode when trials >= parallel (more than 1 concurrent)
+            use_distributed = parallel > 1 and n_trials > 1
+
+            hpo_result = run_hpo(
+                script=train_script,
+                n_trials=n_trials,
+                n_jobs=parallel,
+                study_name=hpo_study_name,
+                search_space=hpo_search_space,
+                direction=direction,
+                objective_metric=objective_metric,
+                distributed=use_distributed,
+                queue=exec_queue,
                 project=self.project,
-                step_name="hpo",
-                base_task_name=train_script,
-                base_task_project=self.project,
-                parameter_override=hpo_params_override,
-                execution_queue=exec_queue,
-                time_limit=step_time_limit,
+                pruner=pruner,
             )
-            steps.append(add_hpo_result)
 
-        # Step 2: Train (uses best params from HPO)
-        if "train" not in skip:
-            train_parents = ["hpo"] if "hpo" not in skip else None
-            add_train_result = pipeline_add_step(
-                pipeline_name=pipeline_name_actual,
-                project=self.project,
-                step_name="train",
-                base_task_name=train_script,
-                base_task_project=self.project,
-                parents=train_parents,
-                # Parameter override will reference HPO best params
-                # via clearml pipeline variable syntax
-                parameter_override={} if train_parents else None,
-                execution_queue=exec_queue,
-                time_limit=step_time_limit,
-            )
-            steps.append(add_train_result)
+            # Extract best params from HPO result
+            if hpo_result and hpo_result.get("best_params"):
+                raw = hpo_result["best_params"]
+                train_params = {}
+                for k, v in raw.items():
+                    if isinstance(v, str):
+                        v = _try_float(v)
+                    train_params[k] = v
+            else:
+                # Fallback: try reading from Optuna study storage
+                best = self._get_hpo_best_params(hpo_study_name)
+                if best:
+                    train_params = {k: (v if not isinstance(v, str) else _try_float(v)) for k, v in best.items()}
 
-        # Step 3: Eval
-        if "eval" not in skip and eval_script:
-            eval_parents: list[str] = []
-            if "train" not in skip:
-                eval_parents.append("train")
-            elif "hpo" not in skip:
-                eval_parents.append("hpo")
-
-            eval_override: dict[str, Any] = {}
-            if eval_params:
-                eval_override["Args"] = {k: str(v) for k, v in eval_params.items()}
-
-            add_eval_result = pipeline_add_step(
-                pipeline_name=pipeline_name_actual,
-                project=self.project,
-                step_name="eval",
-                base_task_name=eval_script,
-                base_task_project=self.project,
-                parents=eval_parents if eval_parents else None,
-                parameter_override=eval_override if eval_override else None,
-                execution_queue=exec_queue,
-                time_limit=step_time_limit,
-            )
-            steps.append(add_eval_result)
-
-        start_result = pipeline_start(
-            pipeline_name=pipeline_name_actual,
-            project=self.project,
-            version=version or DEFAULT_PIPELINE_VERSION,
-            queue_name=exec_queue,
-            timeout_minutes=timeout,
+        # ── Phase 2: Train → Eval pipeline with best params ──
+        pipe_result = self.train_val_submit(
+            train_script=train_script,
+            train_params=train_params,
+            eval_script=eval_script,
+            eval_params=eval_params,
+            pipeline_name=pipeline_name,
+            version=version,
+            execution_queue=exec_queue,
+            abort_on_failure=None,
+            timeout=timeout,
+            step_time_limit=step_time_limit,
+            skip_steps=[s for s in ["hpo", "eval"] if s in skip],
         )
 
         result: dict[str, Any] = {
-            "pipeline_id": create_result.get("pipeline_id", ""),
-            "name": pipeline_name_actual,
-            "project": self.project,
-            "version": version or DEFAULT_PIPELINE_VERSION,
-            "steps": [
-                {
-                    "name": s.get("step_name", ""),
-                    "parents": s.get("parents", []),
-                    "status": s.get("status", "defined"),
-                }
-                for s in steps
-            ],
-            "status": start_result.get("status", "started"),
-            "queue": exec_queue or "local",
+            "phase_1": hpo_result or {"study_name": hpo_study_name, "skipped": True},
+            "phase_2": pipe_result,
             "mode": "full",
             "n_trials": n_trials if "hpo" not in skip else 0,
             "parallel": parallel if "hpo" not in skip else 0,

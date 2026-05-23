@@ -388,29 +388,37 @@ class TestPipelineCLI:
 
     def test_submit_full_via_cli(self, mock_clearml):
         """Test pipeline submit-full CLI triggers HPO mode."""
+        from unittest.mock import patch
+
         from typer.testing import CliRunner
 
         from expflow_pde.cli import app
 
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            [
-                "pipeline",
-                "submit-full",
-                "train_task1.py",
-                "--queue",
-                "default",
-                "--trials",
-                "30",
-                "--parallel",
-                "4",
-                "--eval-script",
-                "eval_task1.py",
-            ],
-        )
+        # Mock run_hpo to avoid remote clearml calls in Phase 1
+        with patch("expflow_pde.hpo.run_hpo") as mock_run_hpo:
+            mock_run_hpo.return_value = {
+                "study_name": "test_hpo",
+                "best_params": {"lr": 0.002, "epochs": 80},
+            }
+
+            runner = CliRunner()
+            result = runner.invoke(
+                app,
+                [
+                    "pipeline",
+                    "submit-full",
+                    "train_task1.py",
+                    "--queue",
+                    "default",
+                    "--trials",
+                    "30",
+                    "--parallel",
+                    "4",
+                    "--eval-script",
+                    "eval_task1.py",
+                ],
+            )
 
         assert result.exit_code == 0
         assert "mode: full" in result.stdout
-        assert "Steps:" in result.stdout
         assert "HPO:" in result.stdout

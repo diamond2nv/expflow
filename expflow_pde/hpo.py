@@ -158,9 +158,9 @@ def _get_pruner(pruner_name: str | None = None) -> Any:
 
     pruner_map = {
         "hyperband": lambda: optuna.pruners.HyperbandPruner(
-            min_epochs=10,
+            min_resource=10,
             reduction_factor=3,
-            max_epochs=200,
+            max_resource=200,
         ),
         "median": lambda: optuna.pruners.MedianPruner(
             n_startup_trials=5,

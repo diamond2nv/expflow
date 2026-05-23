@@ -434,19 +434,28 @@ def submit_full_cmd(
 
 
 def _print_result(result: dict[str, Any], wait: bool, timeout: float | None) -> None:
-    """Pretty-print a pipeline result."""
+    """Pretty-print a pipeline result.
+
+    Supports both:
+      - flat mode (from train_val_submit)
+      - nested mode (from train_hpo_val_submit, result["phase_2"])
+    """
     mode = result.get("mode", "fast")
-    print(f"Pipeline submitted: {result['name']} (mode: {mode})")
-    print(f"  ID:       {result['pipeline_id']}")
-    print(f"  Project:  {result['project']}")
-    print(f"  Queue:    {result['queue']}")
-    print(f"  Steps:    {len(result['steps'])}")
-    for s in result["steps"]:
+
+    # Unwrap phase_2 if present (full mode)
+    display = result.get("phase_2", result)
+
+    print(f"Pipeline submitted: {display['name']} (mode: {mode})")
+    print(f"  ID:       {display['pipeline_id']}")
+    print(f"  Project:  {display['project']}")
+    print(f"  Queue:    {display['queue']}")
+    print(f"  Steps:    {len(display['steps'])}")
+    for s in display["steps"]:
         parents_str = f" (depends on: {', '.join(s['parents'])})" if s.get("parents") else ""
         print(f"    - {s['name']} [{s['status']}]{parents_str}")
     if result.get("n_trials"):
         print(f"  HPO:      {result['n_trials']} trials, {result.get('parallel', '?')} parallel")
-    print(f"  Status:   {result['status']}")
+    print(f"  Status:   {display['status']}")
     if wait:
         print(f"  Wait:     completed (timeout={timeout or 'none'} min)")
 
