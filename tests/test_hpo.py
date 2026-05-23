@@ -1131,3 +1131,229 @@ class TestSearchTree:
         assert any("FNO" in line for line in lines)
         assert any("DeepONet" in line for line in lines)
 
+
+# ── cond_search_space_tree tests ──
+
+
+class TestCondSearchTree:
+    """Tests for cond_search_space_tree with bias/constraints/failures."""
+
+    def test_flat_passthrough(self):
+        """No bias/constraints/failures → tree unchanged."""
+        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
+
+        result = cond_search_space_tree(tree=_DEFAULT_SEARCH_TREE)
+        # Root keys preserved
+        assert "architecture" in result
+        assert result["architecture"]["type"] == "categorical"
+        assert result["architecture"]["choices"] == ["FNO", "DeepONet", "PINO"]
+        # Leaf params preserved
+        assert "lr" in result
+        assert result["lr"]["type"] == "float"
+        assert result["lr"]["low"] == 1e-4
+
+    def test_bias_narrows_leaf(self):
+        """Bias narrows a flat leaf param."""
+        from expflow_pde.hpo import cond_search_space_tree
+
+        tree = {"lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True}}
+        result = cond_search_space_tree(
+            tree=tree,
+            bias={"lr": {"low": 5e-4, "high": 5e-3}},
+        )
+        assert result["lr"]["low"] == 5e-4
+        assert result["lr"]["high"] == 5e-3
+
+    def test_bias_narrows_arch_child(self):
+        """Bias narrows a param inside architecture _children."""
+        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
+
+        result = cond_search_space_tree(
+            tree=_DEFAULT_SEARCH_TREE,
+            bias={"modes": {"low": 12, "high": 24}},
+        )
+        # All three arch subtrees' modes are narrowed
+        fno_modes = result["architecture"]["_children"]["FNO"].get("modes", {})
+        assert fno_modes.get("low") == 12
+        assert fno_modes.get("high") == 24
+
+    def test_oom_caps_capacity_keys(self):
+        """Failures with 'oom' type cap size params in both arch and root."""
+        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
+
+        result = cond_search_space_tree(
+            tree=_DEFAULT_SEARCH_TREE,
+            failures=[{"type": "oom"}],
+        )
+        # Root-level batch_size capped (CAPACITY_KEYS includes batch_size)
+        assert result["batch_size"]["high"] < 256
+        # FNO _children width capped
+        fno_width = result["architecture"]["_children"]["FNO"]["width"]
+        assert fno_width["high"] < 128
+
+    def test_time_constraint_on_epochs(self):
+        """Constraints slow max_train_minutes caps epochs."""
+        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
+
+        result = cond_search_space_tree(
+            tree=_DEFAULT_SEARCH_TREE,
+            constraints={"max_train_minutes": 30},
+        )
+        assert result["epochs"]["high"] <= 60  # 30 * EPOCHS_PER_MINUTE
+
+    def test_bias_on_nonexistent_param_ignored(self):
+        """Bias for a param not in tree is silently ignored."""
+        from expflow_pde.hpo import cond_search_space_tree
+
+        tree = {"x": {"type": "int", "low": 1, "high": 10}}
+        result = cond_search_space_tree(
+            tree=tree,
+            bias={"nonexistent": {"low": 0}},
+        )
+        assert "nonexistent" not in result
+
+
+# ── run_hpo use_tree integration tests ──
+
+
+class TestRunHpoUseTree:
+    """Tests for run_hpo(use_tree=True) integration."""
+
+    def test_local_tree_mode_dispatches(self):
+        """run_hpo(use_tree=True) calls cond_search_space_tree and _suggest_params_tree."""
+        from expflow_pde import hpo as hpo_mod
+
+        orig_cond = hpo_mod.cond_search_space_tree
+        orig_suggest = hpo_mod._suggest_params_tree
+
+        called_cond = False
+        called_suggest = False
+
+        def _fake_cond(**kw):
+            nonlocal called_cond
+            called_cond = True
+            return kw.get("tree") or orig_cond(**kw)
+
+        def _fake_suggest(*a, **kw):
+            nonlocal called_suggest
+            called_suggest = True
+            return {"a": 1}
+
+        hpo_mod.cond_search_space_tree = _fake_cond
+        hpo_mod._suggest_params_tree = _fake_suggest
+        hpo_mod._suggest_params = lambda t, s: {"a": 2}
+
+        import optuna
+        study = optuna.create_study(direction="maximize")
+
+        # Temporarily patch _run_hpo_local to run a single trial
+        original_local = hpo_mod._run_hpo_local
+
+        def _fake_local(**_kw):
+            nonlocal called_suggest
+            # Simulate what _run_hpo_local does internally
+            trial = study.ask()
+            suggest_fn = hpo_mod._suggest_params_tree if _kw.get("use_tree") else hpo_mod._suggest_params
+            params = suggest_fn(trial, _kw["search_space"])
+            called_suggest = True
+            return {
+                "study_name": _kw.get("study_name", "test"),
+                "n_trials": 0,
+                "completed": 1,
+                "failed": 0,
+                "best_value": 1.0,
+                "best_params": params,
+                "direction": "maximize",
+                "duration_sec": 0.0,
+                "method": "local",
+            }
+
+        hpo_mod._run_hpo_local = _fake_local
+
+        try:
+            result = hpo_mod.run_hpo(
+                script="echo",
+                n_trials=1,
+                use_tree=True,
+                study_name="test_tree_integration",
+            )
+            assert called_cond, "cond_search_space_tree was not called"
+            # The params should come from _suggest_params_tree = {"a": 1}
+            params = result.get("best_params", {})
+            assert params == {"a": 1}, f"Expected tree-sampled params, got {params}"
+        finally:
+            hpo_mod.cond_search_space_tree = orig_cond
+            hpo_mod._run_hpo_local = original_local
+            hpo_mod._suggest_params_tree = orig_suggest
+
+
+# ── Training curve classification tests (Paradigm 5) ──
+
+
+class TestTrainingCurve:
+    """Tests for _classify_training_curve and train_curve_feedback."""
+
+    def test_linear_curve(self):
+        """Steady linear improvement → 'linear'."""
+        from expflow_pde.hpo import _classify_training_curve
+
+        # Evenly spaced: 10, 20, 30, 40, 50
+        curve = list(range(10, 60, 10))
+        assert _classify_training_curve(curve) == "linear"
+
+    def test_sigmoid_curve(self):
+        """Early values near max → 'sigmoid'."""
+        from expflow_pde.hpo import _classify_training_curve
+
+        # Early 20% (first 2 of 10) already at 80% of max
+        curve = [85, 87, 88, 89, 90, 91, 92, 93, 94, 95]
+        assert _classify_training_curve(curve) == "sigmoid"
+
+    def test_plateau_curve(self):
+        """Last 50% flat → 'plateau'."""
+        from expflow_pde.hpo import _classify_training_curve
+
+        # Climbs early, then flat
+        curve = [10, 30, 50, 60, 62, 62, 62, 62, 62, 62]
+        assert _classify_training_curve(curve) == "plateau"
+
+    def test_oscillating_curve(self):
+        """High CV → 'oscillating'."""
+        from expflow_pde.hpo import _classify_training_curve
+
+        cv = [10, 80, 15, 85, 12, 78, 14, 82, 11, 79]
+        assert _classify_training_curve(cv) == "oscillating"
+
+    def test_short_curve_defaults_to_linear(self):
+        """< 5 points → 'linear'."""
+        from expflow_pde.hpo import _classify_training_curve
+
+        assert _classify_training_curve([1, 2, 3]) == "linear"
+
+    def test_feedback_linear(self):
+        """train_curve_feedback for linear curve."""
+        from expflow_pde.hpo import train_curve_feedback
+
+        feedback = train_curve_feedback([10, 20, 30, 40, 50])
+        assert feedback["curve"] == "linear"
+        assert feedback["severity"] == "info"
+        assert feedback["adjustments"]["increase_epochs"]
+
+    def test_feedback_plateau(self):
+        """train_curve_feedback for plateau curve."""
+        from expflow_pde.hpo import train_curve_feedback
+
+        feedback = train_curve_feedback(
+            [10, 50, 80, 85, 86, 86, 86, 86, 86, 86]
+        )
+        assert feedback["curve"] == "plateau"
+        assert feedback["severity"] == "critical"
+
+    def test_feedback_sigmoid(self):
+        """train_curve_feedback for sigmoid curve."""
+        from expflow_pde.hpo import train_curve_feedback
+
+        feedback = train_curve_feedback([85, 87, 88, 89, 90])
+        assert feedback["curve"] == "sigmoid"
+        assert feedback["adjustments"]["reduce_capacity"]
+

@@ -425,6 +425,83 @@ def cond_search_space(
     return space
 
 
+def cond_search_space_tree(
+    tree: dict[str, Any] | None = None,
+    bias: dict[str, dict[str, float]] | None = None,
+    constraints: dict[str, Any] | None = None,
+    failures: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Conditional tree search space: narrow ranges based on diagnosis and history.
+
+    Recursively walks the search tree and applies bias/constraints/failures
+    to every leaf (``float``/``int``) parameter node.
+
+    Args:
+        tree: Search tree (uses ``_DEFAULT_SEARCH_TREE`` if None).
+        bias: From suggest_next_params — dict of {param: {"low": ..., "high": ...}}.
+        constraints: Time budget etc. {"max_train_minutes": float}.
+        failures: From GoalOrchestrator.load()["learned_failures"].
+
+    Returns:
+        Modified search tree with narrowed ranges on leaf params.
+    """
+    tree = tree or _DEFAULT_SEARCH_TREE
+
+    def _walk_and_apply(node: Any) -> Any:
+        """Recursive walk: clone dicts, apply bias to leaf specs."""
+        if not isinstance(node, dict):
+            return node
+        result: dict[str, Any] = {}
+        for key, val in node.items():
+            if key == "_children":
+                # Recurse into children subtrees
+                result[key] = {k: _walk_and_apply(v) for k, v in val.items()}
+            elif isinstance(val, dict) and val.get("type") in ("float", "int", "categorical"):
+                # Categorical nodes with _children must recurse
+                _has_children = "_children" in val and isinstance(val["_children"], dict)
+                if val.get("type") in ("float", "int") and bias and key in bias:
+                    spec = dict(val)
+                    b = bias[key]
+                    low = b.get("low")
+                    high = b.get("high")
+                    if low is not None:
+                        spec["low"] = float(low) if isinstance(spec.get("low", 0), (int, float)) else low
+                    if high is not None:
+                        spec["high"] = float(high) if isinstance(spec.get("high", 0), (int, float)) else high
+                    result[key] = spec
+                else:
+                    result[key] = dict(val)
+
+                # Recurse into _children for categorical nodes with child subtrees
+                if _has_children:
+                    result[key]["_children"] = {
+                        k: _walk_and_apply(v) for k, v in val["_children"].items()
+                    }
+
+                # OOM suppression
+                if failures and key in CAPACITY_KEYS:
+                    oom_types = {f.get("type", "") for f in failures if f.get("type") in ("oom", "signal")}
+                    if oom_types:
+                        spec = dict(result[key])
+                        cur_high = spec.get("high", 999)
+                        half = (spec.get("low", 0) + cur_high) / 2.0
+                        spec["high"] = half
+                        result[key] = spec
+
+                # Time constraint on epochs
+                if key == "epochs" and constraints and constraints.get("max_train_minutes"):
+                    max_min = constraints["max_train_minutes"]
+                    if max_min < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES:
+                        spec = dict(result[key])
+                        spec["high"] = min(spec.get("high", 150), int(max_min * EPOCHS_PER_MINUTE))
+                        result[key] = spec
+            else:
+                result[key] = _walk_and_apply(val)
+        return result
+
+    return _walk_and_apply(tree)
+
+
 # ── Pruner factory ──
 
 
@@ -499,6 +576,7 @@ def run_hpo(
     param_prefix: str = "Args/",
     early_stop_threshold: float | None = None,
     early_stop_min_reports: int = 10,
+    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -512,21 +590,35 @@ def run_hpo(
         run_hpo(..., direction=["maximize", "minimize"],
                 objective_metric=["seg_total", "train_time_minutes"])
 
+    When ``use_tree=True``, the search space is treated as a tree-structured
+    space with conditional parameter dependencies (see ``_DEFAULT_SEARCH_TREE``).
+    The ``search_space`` parameter must then be a tree dict, and parameters
+    are sampled via ``_suggest_params_tree()`` instead of ``_suggest_params()``.
+    When ``search_space`` is omitted with ``use_tree=True``, ``_DEFAULT_SEARCH_TREE``
+    is used automatically.
+
     When ``early_stop_threshold`` is set (distributed mode), trials whose
     intermediate scalar values fall below the threshold are stopped early.
 
     Args:
         ...
-        direction: 'maximize', 'minimize', or a list for multi-objective.
-        objective_metric: Metric name or list of metric names for multi-objective.
-        ...
+        use_tree: If True, use tree-structured search space sampling
+                  (``_DEFAULT_SEARCH_TREE`` or the one provided via ``search_space``).
     """
-    ss = cond_search_space(
-        base_space=search_space or _DEFAULT_SEARCH_SPACE,
-        bias=search_bias,
-        constraints=constraints,
-        failures=failures,
-    )
+    if use_tree:
+        ss = cond_search_space_tree(
+            tree=search_space or _DEFAULT_SEARCH_TREE,
+            bias=search_bias,
+            constraints=constraints,
+            failures=failures,
+        )
+    else:
+        ss = cond_search_space(
+            base_space=search_space or _DEFAULT_SEARCH_SPACE,
+            bias=search_bias,
+            constraints=constraints,
+            failures=failures,
+        )
 
     if use_hpo_optimizer:
         return _run_hpo_optimizer(
@@ -563,6 +655,7 @@ def run_hpo(
             param_prefix=param_prefix,
             early_stop_threshold=early_stop_threshold,
             early_stop_min_reports=early_stop_min_reports,
+            use_tree=use_tree,
         )
 
     return _run_hpo_local(
@@ -578,6 +671,7 @@ def run_hpo(
         pruner=pruner,
         loss=loss,
         use_combined_score=use_combined_score,
+        use_tree=use_tree,
     )
 
 
@@ -597,10 +691,13 @@ def _run_hpo_local(
     pruner: str | None = "hyperband",
     loss: str | None = None,
     use_combined_score: bool = False,
+    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run HPO locally on this machine.
 
     Supports multi-objective: pass direction as a list, objective_metric as a list.
+    When ``use_tree=True``, the ``search_space`` is treated as a tree and
+    parameters are sampled via ``_suggest_params_tree()``.
     """
     optuna = _import_optuna()
 
@@ -638,7 +735,9 @@ def _run_hpo_local(
                 break
 
         trial = study.ask()
-        params = _suggest_params(trial, search_space)
+        # In local mode, suggest_fn dispatches to flat or tree sampler
+        suggest_fn = _suggest_params_tree if use_tree else _suggest_params
+        params = suggest_fn(trial, search_space)
         try:
             values = _run_trial_local_multi(script, params, metrics, loss=loss)
             if values is not None and all(v is not None for v in values):
@@ -680,6 +779,7 @@ def _run_hpo_distributed(
     param_prefix: str = "Args/",
     early_stop_threshold: float | None = None,
     early_stop_min_reports: int = 10,
+    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode).
 
@@ -735,7 +835,8 @@ def _run_hpo_distributed(
                 break
 
         trial = study.ask()
-        params = _suggest_params(trial, search_space)
+        suggest_fn = _suggest_params_tree if use_tree else _suggest_params
+        params = suggest_fn(trial, search_space)
 
         trial_task = Task.clone(
             source_task=source_task,
@@ -1687,3 +1788,154 @@ def run_hpo_hierarchical(
         "phase_2": phase2,
     }
     return merged
+
+
+# ── Training curve analysis (Paradigm 5) ──
+
+
+TRAIN_CURVE_CLASSES = frozenset({"sigmoid", "linear", "plateau", "oscillating"})
+"""Four recognised training curve shapes."""
+
+
+def _classify_training_curve(
+    scalar_history: list[float],
+    curve_early_frac: float = 0.2,
+    curve_late_frac: float = 0.5,
+    oscillation_threshold: float = 0.05,
+) -> str:
+    """Classify a training curve into one of four shapes.
+
+    Args:
+        scalar_history: Ordered list of scalar values (e.g. per-epoch val Seg).
+        curve_early_frac: Fraction of total steps considered "early" (default 0.2).
+        curve_late_frac: Fraction of total steps considered "late" (default 0.5).
+        oscillation_threshold: CV threshold for oscillating classification.
+
+    Returns:
+        One of ``"sigmoid"``, ``"linear"``, ``"plateau"``, ``"oscillating"``.
+
+    Shape definitions:
+        sigmoid: early_20% > 80% of max — model capacity too high.
+        linear:  near-constant per-step improvement throughout.
+        plateau: last 50% of steps show negligible gain (<5% relative).
+        oscillating: coefficient of variation > oscillation_threshold.
+    """
+    if len(scalar_history) < 5:
+        return "linear"  # Too few data points, assume linear
+
+    n = len(scalar_history)
+    early = scalar_history[:max(1, int(n * curve_early_frac))]
+    late = scalar_history[max(0, n - int(n * curve_late_frac)):]
+    max_val = max(scalar_history)
+
+    if max_val <= 0:
+        return "linear"
+
+    # Plateau: last 50% of values have very small max-min relative to max
+    # Check BEFORE oscillating because a climb-then-plateau curve may have
+    # high overall CV but is clearly not oscillating.
+    if n >= 10:
+        late_increase = max(late) - min(late)
+        if late_increase < 0.02 * max_val:
+            return "plateau"
+
+    # Oscillating check: high coefficient of variation (std/mean)
+    mean_val = sum(scalar_history) / n
+    variance = sum((v - mean_val) ** 2 for v in scalar_history) / n
+    cv = (variance ** 0.5) / max(mean_val, 1e-10)
+    if cv > oscillation_threshold and n >= 10:
+        return "oscillating"
+
+    # Sigmoid: early values already near max
+    early_max = max(early)
+    if early_max >= 0.8 * max_val:
+        return "sigmoid"
+
+    # Plateau: last 50% of values have very small max-min relative to max
+    late_increase = max(late) - min(late)
+    if late_increase < 0.05 * max_val and n >= 10:
+        return "plateau"
+
+    return "linear"
+
+
+def train_curve_feedback(
+    scalar_history: list[float],
+    current_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Generate HPO feedback based on training curve shape.
+
+    Args:
+        scalar_history: Per-epoch metric values from a completed trial.
+        current_params: The hyperparameters used for this trial (optional, for
+                        contextualising the feedback).
+
+    Returns:
+        Dict with keys::
+
+            {"curve": str,           # shape classification
+             "severity": str,        # "info" | "warn" | "critical"
+             "message": str,         # human-readable description
+             "adjustments": dict}    # HPO space narrowing suggestions
+    """
+    curve = _classify_training_curve(scalar_history)
+    max_val = max(scalar_history) if scalar_history else 0.0
+    final_val = scalar_history[-1] if scalar_history else 0.0
+    n = len(scalar_history)
+
+    if curve == "sigmoid":
+        return {
+            "curve": "sigmoid",
+            "severity": "warn",
+            "message": (
+                f"Converged too fast: early {n}% ({scalar_history[:max(1, n//5)]}) "
+                f"already reached {max_val:.2f}. Model capacity may be excessive."
+            ),
+            "adjustments": {
+                "reduce_capacity": True,
+                "suggest_decrease": ["width", "n_layers", "modes"],
+            },
+        }
+
+    if curve == "oscillating":
+        return {
+            "curve": "oscillating",
+            "severity": "warn",
+            "message": (
+                f"Loss oscillating (CV > 0.05). "
+                f"Final value {final_val:.2f}. Try lower LR or gradient clipping."
+            ),
+            "adjustments": {
+                "reduce_lr": True,
+                "suggest_decrease": ["lr"],
+                "suggest_clip_grad": True,
+            },
+        }
+
+    if curve == "plateau":
+        return {
+            "curve": "plateau",
+            "severity": "critical",
+            "message": (
+                f"Plateaued at {max_val:.2f} for the last {int(n * 0.5)} steps. "
+                f"Model may be stuck in a local minimum. Try architecture change or LR warmup."
+            ),
+            "adjustments": {
+                "change_architecture": True,
+                "suggest_increase": ["lr", "width"],
+            },
+        }
+
+    # linear
+    return {
+        "curve": "linear",
+        "severity": "info",
+        "message": (
+            f"Steady linear improvement to {final_val:.2f} over {n} steps. "
+            f"More epochs may still help."
+        ),
+        "adjustments": {
+            "increase_epochs": True,
+            "suggest_increase": ["epochs"],
+        },
+    }

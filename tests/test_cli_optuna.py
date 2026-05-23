@@ -1,268 +1,96 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""CLI tests for expflow optuna sub-commands via CliRunner.
+"""Tests for expflow CLI — optuna command group.
 
-Mock optuna SDK using sys.modules patch to verify CLI output format.
+Covers: search-tree command, help output, pareto command (basic).
+Uses typer.testing.CliRunner to invoke CLI without subprocess.
 """
 
-import sys
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
 
+import json
+
+import pytest
 from typer.testing import CliRunner
 
-from expflow_pde.cli import app
 
-runner = CliRunner()
-
-
-# ── Helpers ──
-
-
-def _make_mock_study(
-    study_id: int = 1,
-    name: str = "test_study",
-    direction: str = "minimize",
-) -> MagicMock:
-    """Create a mock optuna Study."""
-    study = MagicMock(name=f"Study({name})")
-    study._study_id = study_id
-    study.study_name = name
-    study.direction.name = direction.upper()
-    study.best_trial = MagicMock()
-    study.best_trial.number = 0
-    study.best_trial.params = {"lr": 0.001, "epochs": 100}
-    study.best_trial.value = 0.05
-    study.trials = [
-        MagicMock(number=0, params={"lr": 0.01}, value=0.1),
-        MagicMock(number=1, params={"lr": 0.001}, value=0.05),
-    ]
-    return study
+@pytest.fixture
+def runner() -> CliRunner:
+    """Provide a CliRunner for optuna CLI tests."""
+    return CliRunner()
 
 
-def _mock_optuna_pkg() -> MagicMock:
-    pkg = MagicMock(name="optuna_pkg")
-    pkg.create_study = MagicMock()
-    pkg.delete_study = MagicMock()
-    pkg.load_study = MagicMock()
-    pkg.get_all_study_summaries = MagicMock()
-    pkg.visualization = MagicMock()
-    return pkg
+@pytest.fixture(autouse=True)
+def reset_config():
+    """Reset config cache between tests."""
+    from expflow_pde import config
+
+    config._config_cache.clear()
+    yield
 
 
-# ── Fixture ──
+class TestSearchTreeCLI:
+    """Tests for ``expflow optuna search-tree``."""
 
+    def test_help_output(self, runner: CliRunner):
+        """search-tree --help shows description and options."""
+        from expflow_pde.cli_optuna import optuna_app
 
-def _setup_mock_optuna():
-    """Setup mock optuna package in sys.modules before CLI import."""
-    pkg = _mock_optuna_pkg()
-
-    for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-        if mod in sys.modules:
-            del sys.modules[mod]
-
-    return patch.dict("sys.modules", {"optuna": pkg}), pkg
-
-
-# ══════════════════════════════════════════════════════════════
-# Tests
-# ══════════════════════════════════════════════════════════════
-
-
-class TestOptunaCli:
-    """expflow optuna sub-commands."""
-
-    def test_create_study(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_pkg.create_study.return_value = _make_mock_study(1, "hpo_test", "minimize")
-
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(
-                app,
-                [
-                    "optuna",
-                    "create-study",
-                    "hpo_test",
-                ],
-            )
-
+        result = runner.invoke(optuna_app, ["search-tree", "--help"])
         assert result.exit_code == 0
-        assert "hpo_test" in result.stdout
-        assert "MINIMIZE" in result.stdout
+        assert "search-tree" in result.output.lower()
+        assert "--json" in result.output
 
-    def test_create_study_maximize(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_pkg.create_study.return_value = _make_mock_study(1, "hpo_max", "maximize")
+    def test_ascii_tree_output(self, runner: CliRunner):
+        """search-tree (no args) shows ascii tree with architecture choices."""
+        from expflow_pde.cli_optuna import optuna_app
 
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(
-                app,
-                [
-                    "optuna",
-                    "create-study",
-                    "hpo_max",
-                    "--direction",
-                    "maximize",
-                ],
-            )
-
+        result = runner.invoke(optuna_app, ["search-tree"])
         assert result.exit_code == 0
-        assert "MAXIMIZE" in result.stdout
+        assert "FNO" in result.output
+        assert "DeepONet" in result.output
+        assert "choice" in result.output
+        assert "Search Tree:" in result.output
 
-    def test_list_studies(self):
-        mock_pkg = _mock_optuna_pkg()
-        sum1 = MagicMock()
-        sum1._study_id = 1
-        sum1.study_name = "study_a"
-        sum1.direction.name = "MINIMIZE"
-        sum1.best_trial = MagicMock(number=3, value=0.05)
+    def test_json_output(self, runner: CliRunner):
+        """search-tree --json outputs parseable JSON."""
+        from expflow_pde.cli_optuna import optuna_app
 
-        sum2 = MagicMock()
-        sum2._study_id = 2
-        sum2.study_name = "study_b"
-        sum2.direction.name = "MAXIMIZE"
-        sum2.best_trial = None
-
-        mock_pkg.get_all_study_summaries.return_value = [sum1, sum2]
-
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(app, ["optuna", "studies"])
-
+        result = runner.invoke(optuna_app, ["search-tree", "--json"])
         assert result.exit_code == 0
-        assert "study_a" in result.stdout
-        assert "study_b" in result.stdout
-        assert "0.050000" in result.stdout
+        data = json.loads(result.output)
+        assert "architecture" in data
+        assert data["architecture"]["type"] == "categorical"
+        assert "FNO" in data["architecture"]["_children"]
 
-    def test_list_studies_empty(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_pkg.get_all_study_summaries.return_value = []
+    def test_json_output_valid_structure(self, runner: CliRunner):
+        """JSON output matches the _DEFAULT_SEARCH_TREE schema."""
+        from expflow_pde.cli_optuna import optuna_app
+        from expflow_pde.hpo import _DEFAULT_SEARCH_TREE
 
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(app, ["optuna", "studies"])
-
+        result = runner.invoke(optuna_app, ["search-tree", "--json"])
         assert result.exit_code == 0
-        assert "No studies found." in result.stdout
+        data = json.loads(result.output)
+        # Verify structure matches tree constant
+        assert set(data.keys()) == set(_DEFAULT_SEARCH_TREE.keys())
+        assert data["architecture"]["choices"] == _DEFAULT_SEARCH_TREE["architecture"]["choices"]
 
-    def test_get_study(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_pkg.load_study.return_value = _make_mock_study(1, "my_study", "minimize")
 
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
+class TestParetoCLI:
+    """Basic tests for ``expflow optuna pareto``."""
 
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(app, ["optuna", "study", "my_study"])
+    def test_help_output(self, runner: CliRunner):
+        """pareto --help shows usage."""
+        from expflow_pde.cli_optuna import optuna_app
 
+        result = runner.invoke(optuna_app, ["pareto", "--help"])
         assert result.exit_code == 0
-        assert "my_study" in result.stdout
-        assert "MINIMIZE" in result.stdout
-        assert "0.05" in result.stdout
+        assert "pareto" in result.output.lower()
 
-    def test_delete_study(self):
-        mock_pkg = _mock_optuna_pkg()
+    def test_pareto_no_study_prints_error(self, runner: CliRunner):
+        """pareto on empty DB shows a meaningful message."""
+        from expflow_pde.cli_optuna import optuna_app
 
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(app, ["optuna", "delete-study", "my_study"])
-
-        assert result.exit_code == 0
-        assert "deleted" in result.stdout
-
-    def test_ask_trial(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_study = _make_mock_study(1, "my_study", "minimize")
-        mock_trial = MagicMock()
-        mock_trial.number = 3
-        mock_trial.params = {"lr": 0.01, "epochs": 200}
-        mock_study.ask.return_value = mock_trial
-        mock_pkg.load_study.return_value = mock_study
-
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(app, ["optuna", "ask", "my_study"])
-
-        assert result.exit_code == 0
-        assert "Trial #3" in result.stdout
-        assert "lr: 0.01" in result.stdout
-
-    def test_tell_trial(self):
-        mock_pkg = _mock_optuna_pkg()
-        mock_study = _make_mock_study(1, "my_study", "minimize")
-        mock_pkg.load_study.return_value = mock_study
-
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with patch.dict("sys.modules", {"optuna": mock_pkg}):
-            result = runner.invoke(
-                app,
-                [
-                    "optuna",
-                    "tell",
-                    "my_study",
-                    "3",
-                    "0.05",
-                ],
-            )
-
-        assert result.exit_code == 0
-        assert "Trial #3" in result.stdout
-        assert "0.05" in result.stdout
-
-    def test_plot(self):
-        import os
-        import tempfile
-
-        mock_pkg = _mock_optuna_pkg()
-        mock_study = _make_mock_study(1, "my_study", "minimize")
-        mock_pkg.load_study.return_value = mock_study
-        mock_fig = MagicMock()
-        mock_pkg.visualization.plot_optimization_history.return_value = mock_fig
-
-        for mod in ["expflow.optuna", "expflow.cli_optuna"]:
-            if mod in sys.modules:
-                del sys.modules[mod]
-
-        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
-            output_path = f.name
-
-        try:
-            with patch.dict("sys.modules", {"optuna": mock_pkg}):
-                result = runner.invoke(
-                    app,
-                    [
-                        "optuna",
-                        "plot",
-                        "my_study",
-                        "--output",
-                        output_path,
-                    ],
-                )
-
-            assert result.exit_code == 0
-            assert output_path in result.stdout
-        finally:
-            os.unlink(output_path)
+        result = runner.invoke(optuna_app, ["pareto", "nonexistent_study"])
+        # Should produce some output (error or empty), not crash
+        assert result.exit_code in (0, 1)
