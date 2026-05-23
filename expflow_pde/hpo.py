@@ -86,6 +86,202 @@ _DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
 }
 
 
+# ── Tree-structured search space ──
+# A search tree supports conditional parameter dependencies: the set of
+# hyperparameters to sample depends on a prior choice (architecture family,
+# scheduler type, etc.).  Each tree node is one of:
+#
+#   Leaf dict: ―  same format as _DEFAULT_SEARCH_SPACE (flat param → spec)
+#   Categorical node:  {"type": "categorical", "choices": [...]}
+#     + child dict keyed by each choice (or a "__default__" fallback)
+#   Branch node:  same format, but precedes a nested "_children" key
+#
+# Schema (recursive):
+#   SearchTree = dict[str, TreeNode]
+#   TreeNode   = ParamSpec        |  # leaf: sample and stop
+#                 CategoricalSpec  |  # choice → recurse into children
+#                 dict[str, TreeNode]  # implicit branch: just recurse
+#   ParamSpec      = {"type": "float"|"int", "low": ..., "high": ..., ...}
+#   CategoricalSpec = {"type": "categorical", "choices": [...],
+#                      "_children": dict[str, SearchTree]}
+#
+# When "_children" is present, every child subtree is sampled with the
+# choice's value available as a sampled parameter (named after this node).
+
+_DEFAULT_SEARCH_TREE: dict[str, Any] = {
+    "architecture": {
+        "type": "categorical",
+        "choices": ["FNO", "DeepONet", "PINO"],
+        "_children": {
+            "FNO": {
+                "modes": {"type": "int", "low": 8, "high": 32, "step": 4},
+                "width": {"type": "int", "low": 16, "high": 128, "step": 16},
+                "n_layers": {"type": "int", "low": 2, "high": 6, "step": 1},
+            },
+            "DeepONet": {
+                "width": {"type": "int", "low": 32, "high": 256, "step": 32},
+                "branch_depth": {"type": "int", "low": 2, "high": 6, "step": 1},
+                "trunk_depth": {"type": "int", "low": 2, "high": 6, "step": 1},
+            },
+            "PINO": {
+                "pde_loss_weight": {
+                    "type": "float", "low": 1e-4, "high": 1.0, "log": True,
+                },
+                "phys_freq": {"type": "categorical", "choices": [1, 5, 10, 20]},
+            },
+        },
+    },
+    # Training params are flat at root level (no prefix) so that
+    # downstream CLI / training scripts receive --lr, --batch_size etc.
+    "lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
+    "batch_size": {"type": "int", "low": 64, "high": 256, "step": 32},
+    "epochs": {"type": "int", "low": 40, "high": 120, "step": 10},
+    "weight_decay": {"type": "float", "low": 0.0, "high": 1e-5, "log": True},
+    "dropout": {"type": "float", "low": 0.0, "high": 0.5, "step": 0.05},
+    "sub_step": {"type": "int", "low": 1, "high": 6, "step": 1},
+    "scheduler": {
+        "type": "categorical",
+        "choices": ["cosine", "step", "none"],
+    },
+}
+"""
+Tree-structured search space with conditional parameter dependencies.
+
+Root level divides parameters into families:
+  - ``architecture``: categorical choice (FNO / DeepONet / PINO) that
+    determines which architecture-specific params are sampled.
+  - ``training``: flat sub-space shared by all architectures.
+
+Usage::
+
+    from expflow_pde.hpo import _suggest_params_tree
+    params = _suggest_params_tree(optuna_trial, _DEFAULT_SEARCH_TREE)
+    # -> {"architecture": "FNO", "modes": 16, "width": 64,
+    #     "lr": 0.001, "batch_size": 128, ...}
+"""
+
+
+def _suggest_params_tree(
+    trial: Any,
+    tree: dict[str, Any],
+    prefix: str = "",
+) -> dict[str, Any]:
+    """Recursively sample hyperparameters from a tree-structured space.
+
+    Args:
+        trial: Optuna ``Trial`` object (must have ``suggest_*`` methods).
+        tree: Search tree following the ``_DEFAULT_SEARCH_TREE`` schema.
+        prefix: Optional namespace prefix for parameter names (e.g. ``"arch/"``).
+
+    Returns:
+        Flat dict of sampled parameter names → values.
+    """
+    params: dict[str, Any] = {}
+    for key, spec in tree.items():
+        name = f"{prefix}{key}" if prefix else key
+
+        _suggest_tree_recursive(trial, params, name, spec)
+
+    return params
+
+
+def _suggest_tree_recursive(
+    trial: Any,
+    params: dict[str, Any],
+    name: str,
+    spec: Any,
+) -> None:
+    """Recursive helper for ``_suggest_params_tree``.
+
+    Modifies ``params`` in-place.
+    """
+    if not isinstance(spec, dict):
+        return
+
+    ptype = spec.get("type")
+
+    if ptype == "categorical":
+        choices = spec["choices"]
+        chosen = trial.suggest_categorical(name, choices)
+
+        # This choice itself is a sampled param
+        # (cast to Python native type for JSON-safe output)
+        if isinstance(chosen, type("")):
+            pass
+        params[name] = chosen
+
+        # Recurse into children subtrees if present
+        children: dict | None = spec.get("_children")
+        if children is not None:
+            child_tree = children.get(chosen) or children.get("__default__")
+            if child_tree is not None:
+                for ck, cv in child_tree.items():
+                    _suggest_tree_recursive(trial, params, ck, cv)
+        return
+
+    if ptype in ("float", "int"):
+        if ptype == "float":
+            params[name] = trial.suggest_float(
+                name,
+                spec["low"],
+                spec["high"],
+                log=spec.get("log", False),
+                step=spec.get("step"),
+            )
+        else:
+            params[name] = trial.suggest_int(
+                name,
+                spec["low"],
+                spec["high"],
+                step=spec.get("step", 1),
+            )
+        return
+
+    # Plain dict without "type" → it's an implicit branch, recurse
+    for k, v in spec.items():
+        _suggest_tree_recursive(trial, params, f"{name}.{k}", v)
+
+
+def _describe_search_tree(tree: dict[str, Any], indent: int = 0) -> list[str]:
+    """Flatten a search tree into human-readable description lines.
+
+    Used by the ``expflow optuna search-tree`` CLI command.
+    """
+    lines: list[str] = []
+    pad = "  " * indent
+    for key, spec in tree.items():
+        if not isinstance(spec, dict):
+            lines.append(f"{pad}{key}: {spec}")
+            continue
+        ptype = spec.get("type")
+        if ptype == "categorical":
+            choices = spec["choices"]
+            desc = f"choice ∈ {choices}"
+            lines.append(f"{pad}├─ {key}: {desc}")
+            children: dict | None = spec.get("_children")
+            if children:
+                for choice, subtree in children.items():
+                    lines.append(f"{pad}│  └─ [{choice}]:")
+                    lines.extend(_describe_search_tree(subtree, indent + 2))
+        elif ptype in ("float", "int"):
+            low = spec.get("low", "?")
+            high = spec.get("high", "?")
+            log = spec.get("log", False)
+            step = spec.get("step")
+            desc = f"[{low}, {high}]"
+            if log:
+                desc += " (log)"
+            if step is not None:
+                desc += f" step={step}"
+            lines.append(f"{pad}├─ {key}: {desc}")
+        elif ptype == "choices":
+            lines.append(f"{pad}├─ {key}: choice ∈ {spec.get('choices', [])}")
+        else:
+            lines.append(f"{pad}├─ {key}: (branch)")
+            lines.extend(_describe_search_tree(spec, indent + 1))
+    return lines
+
+
 # ── Conditional search space defaults ──
 # When OOM/signal failures accumulate, these params are capped at (low + high) / 2.
 CAPACITY_KEYS: set[str] = {"n_modes", "width", "batch_size", "n_layers"}

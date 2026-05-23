@@ -1031,3 +1031,103 @@ class TestCollectOneTrialEarlyStop:
         # Good task should NOT be stopped, bad task should be stopped
         task_good.stop.assert_not_called()
         task_bad.stop.assert_called_once()
+
+
+# ── Tree search space tests ──
+
+
+class TestSearchTree:
+    """Tests for _suggest_params_tree and related helpers."""
+
+    def test_suggest_tree_flat_equiv(self):
+        """Tree with no categorical branches should behave like flat space."""
+        from expflow_pde.hpo import _suggest_params_tree
+
+        trial = MagicMock()
+        trial.suggest_float.return_value = 0.001
+        trial.suggest_int.return_value = 64
+        tree = {
+            "lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
+            "width": {"type": "int", "low": 16, "high": 128, "step": 16},
+        }
+        params = _suggest_params_tree(trial, tree)
+        assert params["lr"] == 0.001
+        assert params["width"] == 64
+
+    def test_suggest_tree_architecture_choice(self):
+        """Architecture categorical node selects correct child subtree."""
+        from expflow_pde.hpo import _suggest_params_tree, _DEFAULT_SEARCH_TREE
+
+        # Mock FNO path:
+        # - suggest_categorical called: architecture (1st call)
+        # - suggest_float called: lr, weight_decay, dropout (3 calls)
+        # - suggest_int called: modes, width, n_layers, batch_size, epochs, sub_step (6 calls)
+        # - suggest_categorical called: scheduler (2nd call)
+        trial_fno = MagicMock()
+        trial_fno.suggest_categorical.side_effect = ["FNO", "cosine"]
+        trial_fno.suggest_float.return_value = 0.001
+        trial_fno.suggest_int.side_effect = [12, 64, 4, 128, 80, 5]  # modes,width,n_layers,batch,epochs,sub_step
+
+        params = _suggest_params_tree(trial_fno, _DEFAULT_SEARCH_TREE)
+        assert params["architecture"] == "FNO"
+        assert "modes" in params
+        assert "width" in params
+        assert "n_layers" in params
+        assert "branch_depth" not in params  # DeepONet-specific
+        assert "lr" in params
+        assert params["scheduler"] == "cosine"
+
+        # Mock DeepONet path
+        trial_deepo = MagicMock()
+        trial_deepo.suggest_categorical.side_effect = ["DeepONet", "cosine"]
+        trial_deepo.suggest_float.return_value = 0.001
+        trial_deepo.suggest_int.side_effect = [128, 4, 3, 128, 80, 5]  # width,branch_depth,trunk_depth,batch,epochs,sub_step
+
+        params2 = _suggest_params_tree(trial_deepo, _DEFAULT_SEARCH_TREE)
+        assert params2["architecture"] == "DeepONet"
+        assert "branch_depth" in params2
+        assert "trunk_depth" in params2
+        assert "modes" not in params2  # FNO-specific
+
+    def test_suggest_tree_training_params_always_present(self):
+        """Training params at root level should appear regardless of arch choice."""
+        from expflow_pde.hpo import _suggest_params_tree, _DEFAULT_SEARCH_TREE
+
+        trial = MagicMock()
+        trial.suggest_categorical.side_effect = ["FNO", "cosine"]
+        trial.suggest_float.return_value = 0.001
+        # FNO arch: modes(12), width(64), n_layers(4)
+        # Root lvl: batch_size(128), epochs(80), weight_decay(0), dropout(0), sub_step(5)
+        trial.suggest_int.side_effect = [12, 64, 4, 128, 80, 0, 5]
+
+        params = _suggest_params_tree(trial, _DEFAULT_SEARCH_TREE)
+        assert "lr" in params
+        assert params.get("scheduler") == "cosine"
+        assert params.get("architecture") == "FNO"
+
+    def test_suggest_tree_recursive_no_side_effects(self):
+        """Multiple calls with same trial should not bleed."""
+        from expflow_pde.hpo import _suggest_params_tree
+
+        trial = MagicMock()
+        trial.suggest_float.return_value = 0.001
+        trial.suggest_int.return_value = 64
+
+        tree = {
+            "a": {"type": "float", "low": 0.0, "high": 1.0},
+            "b": {"type": "int", "low": 1, "high": 10},
+        }
+        p1 = _suggest_params_tree(trial, tree)
+        p2 = _suggest_params_tree(trial, tree)
+        assert p1 == p2
+
+    def test_describe_search_tree_output(self):
+        """_describe_search_tree produces a non-empty list of lines."""
+        from expflow_pde.hpo import _describe_search_tree, _DEFAULT_SEARCH_TREE
+
+        lines = _describe_search_tree(_DEFAULT_SEARCH_TREE)
+        assert len(lines) > 0
+        assert any("choice" in line for line in lines)
+        assert any("FNO" in line for line in lines)
+        assert any("DeepONet" in line for line in lines)
+

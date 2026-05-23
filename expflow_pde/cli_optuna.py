@@ -520,3 +520,37 @@ def pareto_cmd(
         v1 = pt["values"][0]
         v2 = pt["values"][1] if len(pt["values"]) >= 2 else 0
         print(f"  {pt['number']:>8} {v1:>12.4f} {v2:>12.4f}  {params_str}")
+
+
+@optuna_app.command("search-tree")
+def search_tree_cmd(
+    json_output: bool = typer.Option(
+        False, "--json", "-j", help="Output tree as JSON instead of ascii"
+    ),
+) -> None:
+    """Display the default tree-structured search space.
+
+    Shows a visual tree of all architecture families, training parameters,
+    and their conditional dependencies. Useful for understanding what
+    hyperparameters will be sampled during a tree-based HPO run.
+
+    Example::
+
+        expflow optuna search-tree
+        expflow optuna search-tree --json   # for programmatic access
+    """
+    from expflow_pde.hpo import _describe_search_tree, _DEFAULT_SEARCH_TREE
+
+    if json_output:
+        import json as _json
+
+        print(_json.dumps(_DEFAULT_SEARCH_TREE, indent=2, default=str))
+        return
+
+    lines = _describe_search_tree(_DEFAULT_SEARCH_TREE)
+    print("Search Tree:")
+    print("─" * 60)
+    for line in lines:
+        print(line)
+    print("─" * 60)
+    print(f"Total nodes: {len(lines)}")
