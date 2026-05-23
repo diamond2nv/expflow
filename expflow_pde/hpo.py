@@ -454,14 +454,14 @@ def _run_hpo_distributed(
         pending.append((trial, params, trial_task))
 
         while len(pending) >= parallel:
-            collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score)
+            collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score, timeout_minutes=timeout_minutes)
             if collected is not None:
                 c, f = collected
                 completed += c
                 failed += f
 
     while pending:
-        collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score)
+        collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score, timeout_minutes=timeout_minutes)
         if collected is not None:
             c, f = collected
             completed += c
@@ -482,7 +482,7 @@ def _collect_one_trial(
     direction: str,
     optuna: Any,
     poll_interval: float = 5.0,
-    timeout_minutes: float = 60.0,
+    timeout_minutes: float | None = 60.0,
     use_combined_score: bool = False,
 ) -> tuple[int, int] | None:
     """Wait for one pending trial to complete and report its result.
@@ -495,7 +495,7 @@ def _collect_one_trial(
         return None
 
     start = time.time()
-    timeout_sec = timeout_minutes * 60
+    timeout_sec = (timeout_minutes or 60.0) * 60
 
     while pending and (time.time() - start) < timeout_sec:
         for i, (trial, params, task) in enumerate(pending):
@@ -596,13 +596,17 @@ def _run_hpo_optimizer(
     loss: str | None = None,
     use_combined_score: bool = False,
     param_prefix: str = "Args/",
+    pruner: str | None = "hyperband",
 ) -> dict[str, Any]:
     """Run HPO via ClearML HyperParameterOptimizer.
+
+    Uses OptimizerOptuna (default) for TPE-based sampling with pruner support.
 
     Args:
         param_prefix: Prefix for parameter keys. The base task uses one of:
             "Args/" (clearml Args section, standard) or "Args/--" (with -- prefix).
             Default "Args/".
+        pruner: Optuna pruner type ('hyperband', 'median', 'percentile', or None).
     """
     from clearml import Task
     from clearml.automation import (
@@ -611,6 +615,7 @@ def _run_hpo_optimizer(
         UniformIntegerParameterRange,
         UniformParameterRange,
     )
+    from clearml.automation.optuna import OptimizerOptuna
 
     if study_name is None:
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -679,17 +684,27 @@ def _run_hpo_optimizer(
 
     start_time = datetime.datetime.now(datetime.timezone.utc)
 
+    # Build optimizer_kwargs for SearchStrategy (OptimizerOptuna)
+    optimizer_kwargs: dict[str, Any] = {
+        "total_max_jobs": n_trials,
+    }
+
+    # Convert pruner name to optuna pruner object for OptimizerOptuna
+    pruner_instance = _get_pruner(pruner)
+    if pruner_instance is not None:
+        optimizer_kwargs["optuna_pruner"] = pruner_instance
+
     optimizer = HyperParameterOptimizer(
         base_task_id=source_task.id,
         hyper_parameters=hpo_params,
         objective_metric_title=metric_title,
         objective_metric_series=metric_series,
         objective_metric_sign=metric_sign,
-        max_number_of_experiments=n_trials,
+        optimizer_class=OptimizerOptuna,
+        max_number_of_concurrent_tasks=parallel,
         execution_queue=queue,
         pool_period_min=1.0,
-        concurrent_jobs=parallel,
-        total_jobs=parallel,
+        **optimizer_kwargs,
     )
 
     optimizer.start()
