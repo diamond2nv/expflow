@@ -44,7 +44,7 @@ def combined_score(seg_total: float, train_minutes: float) -> float:
 
     Total = seg_total * 0.75 + train_time_score + inference_time_score
     At HPO time we only have train_time; infer_time is assumed 0 for ranking.
-    
+
     Args:
         seg_total: seg_total from eval (0-150ish).
         train_minutes: training wall time in minutes.
@@ -454,14 +454,30 @@ def _run_hpo_distributed(
         pending.append((trial, params, trial_task))
 
         while len(pending) >= parallel:
-            collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score, timeout_minutes=timeout_minutes)
+            collected = _collect_one_trial(
+                study,
+                pending,
+                objective_metric,
+                direction,
+                optuna,
+                use_combined_score=use_combined_score,
+                timeout_minutes=timeout_minutes,
+            )
             if collected is not None:
                 c, f = collected
                 completed += c
                 failed += f
 
     while pending:
-        collected = _collect_one_trial(study, pending, objective_metric, direction, optuna, use_combined_score=use_combined_score, timeout_minutes=timeout_minutes)
+        collected = _collect_one_trial(
+            study,
+            pending,
+            objective_metric,
+            direction,
+            optuna,
+            use_combined_score=use_combined_score,
+            timeout_minutes=timeout_minutes,
+        )
         if collected is not None:
             c, f = collected
             completed += c

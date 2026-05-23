@@ -39,7 +39,6 @@ Mode C — **custom skip**:
 
 from __future__ import annotations
 
-from expflow_pde.hpo import get_study_best_params, cond_search_space, combined_score
 from typing import Any
 
 
@@ -303,7 +302,7 @@ class ExperimentPipeline:
         Returns:
             Dict with keys: phase_1 (HPO result), phase_2 (pipeline result).
         """
-        from expflow_pde.hpo import run_hpo, get_study_best_params
+        from expflow_pde.hpo import run_hpo
 
         skip = set(skip_steps or [])
         exec_queue = execution_queue or self.queue
@@ -344,7 +343,9 @@ class ExperimentPipeline:
                 # Fallback: try reading from Optuna study storage
                 best = self._get_hpo_best_params(hpo_study_name)
                 if best:
-                    train_params = {k: (v if not isinstance(v, str) else _try_float(v)) for k, v in best.items()}
+                    train_params = {
+                        k: (v if not isinstance(v, str) else _try_float(v)) for k, v in best.items()
+                    }
 
         # ── Phase 2: Train → Eval pipeline with best params ──
         pipe_result = self.train_val_submit(
@@ -384,6 +385,8 @@ class ExperimentPipeline:
             Dict of clean best params, or None if not found.
         """
         try:
+            from expflow_pde.hpo import get_study_best_params
+
             raw = get_study_best_params(study_name)
             if raw is None:
                 return None

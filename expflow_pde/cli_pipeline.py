@@ -225,7 +225,11 @@ def submit_cmd(
             db = DispatchDB()
             db.register_experiment(
                 script=f"pipeline submit {train_script}",
-                args={"train_script": train_script, "eval_script": eval_script, "params": train_params},
+                args={
+                    "train_script": train_script,
+                    "eval_script": eval_script,
+                    "params": train_params,
+                },
                 queue=queue,
                 project=project,
                 source="pipeline_cli",
@@ -497,21 +501,25 @@ def verify_cmd(
 
     # Check 1: Train script exists
     train_exists = os.path.isfile(train_script)
-    checks.append({
-        "name": "train_script",
-        "status": "pass" if train_exists else "fail",
-        "detail": train_script if train_exists else f"NOT FOUND: {train_script}",
-    })
+    checks.append(
+        {
+            "name": "train_script",
+            "status": "pass" if train_exists else "fail",
+            "detail": train_script if train_exists else f"NOT FOUND: {train_script}",
+        }
+    )
 
     # Check 2: Eval script exists
     eval_exists = True
     if eval_script:
         eval_exists = os.path.isfile(eval_script)
-        checks.append({
-            "name": "eval_script",
-            "status": "pass" if eval_exists else "fail",
-            "detail": eval_script if eval_exists else f"NOT FOUND: {eval_script}",
-        })
+        checks.append(
+            {
+                "name": "eval_script",
+                "status": "pass" if eval_exists else "fail",
+                "detail": eval_script if eval_exists else f"NOT FOUND: {eval_script}",
+            }
+        )
 
     # Check 3: clearml connection
     clearml_ok = False
@@ -538,18 +546,23 @@ def verify_cmd(
     except Exception:
         pass
 
-    checks.append({
-        "name": "clearml_connection",
-        "status": "pass" if clearml_ok else "fail",
-        "detail": "clearml API reachable" if clearml_ok else "Cannot connect to clearml API",
-    })
+    checks.append(
+        {
+            "name": "clearml_connection",
+            "status": "pass" if clearml_ok else "fail",
+            "detail": "clearml API reachable" if clearml_ok else "Cannot connect to clearml API",
+        }
+    )
 
-    checks.append({
-        "name": f"queue_{queue}",
-        "status": "pass" if queue_ok else "warn",
-        "detail": f"Queue '{queue}' found" if queue_ok
-        else f"Queue '{queue}' NOT found (available: {', '.join(queues_found[:10]) or 'none'})",
-    })
+    checks.append(
+        {
+            "name": f"queue_{queue}",
+            "status": "pass" if queue_ok else "warn",
+            "detail": f"Queue '{queue}' found"
+            if queue_ok
+            else f"Queue '{queue}' NOT found (available: {', '.join(queues_found[:10]) or 'none'})",
+        }
+    )
 
     # Check 5: Packages
     pkg_ok = True
@@ -560,13 +573,17 @@ def verify_cmd(
     else:
         pass  # None = clearml auto-detect
 
-    checks.append({
-        "name": "packages",
-        "status": "pass",
-        "detail": "packages: [] (explicit)" if packages == [] else
-        "packages: auto (clearml default)" if packages is None else
-        f"packages: {packages}",
-    })
+    checks.append(
+        {
+            "name": "packages",
+            "status": "pass",
+            "detail": "packages: [] (explicit)"
+            if packages == []
+            else "packages: auto (clearml default)"
+            if packages is None
+            else f"packages: {packages}",
+        }
+    )
 
     result = {
         "all_pass": all(c["status"] == "pass" for c in checks),
@@ -580,5 +597,11 @@ def verify_cmd(
         for c in checks:
             icon = {"pass": "✅", "fail": "❌", "warn": "⚠️"}.get(c["status"], "❓")
             print(f"  {icon}  {c['name']}: {c['detail']}")
-        status = "PASS" if result["all_pass"] else "HAS WARNINGS" if result["warnings"] else "HAS FAILURES"
+        status = (
+            "PASS"
+            if result["all_pass"]
+            else "HAS WARNINGS"
+            if result["warnings"]
+            else "HAS FAILURES"
+        )
         print(f"\nOverall: {status}")
