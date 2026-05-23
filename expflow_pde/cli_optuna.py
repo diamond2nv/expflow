@@ -555,13 +555,13 @@ def study_graph_cmd(
         try:
             from expflow_pde.optuna import get_study
 
-            study = get_study(study_name)
-            for trial in study.trials:
-                if trial.state.name == "COMPLETE" and trial.values:
+            study_data = get_study(study_name)
+            for trial in study_data.get("trials", []):
+                if trial.get("values") and trial.get("params"):
                     g.add_trial(
-                        trial_number=trial.number,
-                        params=trial.params,
-                        value=trial.values,
+                        trial_number=trial["number"],
+                        params=trial["params"],
+                        value=trial["values"],
                         direction="maximize",
                     )
         except Exception:

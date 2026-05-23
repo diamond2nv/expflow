@@ -641,16 +641,16 @@ class TestLoadTrialsFromStorage:
         assert result == []
 
     def test_load_trials_with_mock_optuna(self):
-        """Should load and restore trial values correctly for maximize."""
+        """Should load trial values as stored (no sign flipping)."""
         from expflow_pde.hpo import _load_trials_from_storage
 
         mock_optuna = MagicMock()
         mock_study = MagicMock()
 
-        # Simulate 3 trials: maximize stores -value internally
-        trial1 = MagicMock(number=0, value=-90.0, params={"lr": 0.001})
-        trial2 = MagicMock(number=1, value=-75.0, params={"lr": 0.002})
-        trial3 = MagicMock(number=2, value=-60.0, params={"lr": 0.01})
+        # Simulate 3 trials: ask/tell stores values as-submitted
+        trial1 = MagicMock(number=0, value=90.0, params={"lr": 0.001})
+        trial2 = MagicMock(number=1, value=75.0, params={"lr": 0.002})
+        trial3 = MagicMock(number=2, value=60.0, params={"lr": 0.01})
         mock_study.trials = [trial1, trial2, trial3]
 
         mock_optuna.load_study.return_value = mock_study
@@ -661,7 +661,7 @@ class TestLoadTrialsFromStorage:
                 result = _load_trials_from_storage("test_study", direction="maximize")
 
         assert len(result) == 3
-        assert result[0]["value"] == 90.0  # restored from -90
+        assert result[0]["value"] == 90.0  # raw value, no negate
         assert result[1]["value"] == 75.0
         assert result[2]["value"] == 60.0
 
@@ -986,7 +986,7 @@ class TestCollectOneTrialEarlyStop:
                 early_stop_threshold=10.0,
             )
 
-        assert result == (1, 0)  # completed successfully
+        assert result == (1, 0, None)  # completed successfully
 
     def test_early_stop_with_multiple_pending(self):
         """Should check all pending tasks, not just the first."""
@@ -1203,8 +1203,11 @@ class TestTrainingCurve:
         """Early values near max → 'sigmoid'."""
         from expflow_pde.hpo import _classify_training_curve
 
-        # Early 20% (first 2 of 10) already at 80% of max
-        curve = [85, 87, 88, 89, 90, 91, 92, 93, 94, 95]
+        # Early 20% (first 2 of 10) already at 86%+ of max.
+        # Late span 94..100 = 6, 6/100 = 0.06 > 0.05 plateau threshold → passes plateau.
+        # CV ≈ 0.04 < 0.05 → passes oscillation.
+        # Early max 88 >= 0.8 * 100 = 80 → sigmoid.
+        curve = [86, 88, 90, 92, 93, 94, 94, 95, 95, 100]
         assert _classify_training_curve(curve) == "sigmoid"
 
     def test_plateau_curve(self):

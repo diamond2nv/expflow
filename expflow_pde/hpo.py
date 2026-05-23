@@ -295,6 +295,7 @@ def run_hpo(
     project: str = "PDEBench",
     pruner: str | None = "hyperband",
     use_hpo_optimizer: bool = False,
+    method: str | None = None,
     loss: str | None = None,
     search_bias: dict[str, dict[str, float]] | None = None,
     constraints: dict[str, Any] | None = None,
@@ -306,10 +307,11 @@ def run_hpo(
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
-    Three modes:
+    Four modes:
     1. **local** (default): subprocess-based, no clearml.
     2. **distributed** (distributed=True): ask/tell + clearml Task clone/enqueue.
     3. **hpo_optimizer** (use_hpo_optimizer=True): ClearML HyperParameterOptimizer.
+    4. **pymoo** (method="pymoo"): NSGA-II via pymoo (requires pip install pymoo).
 
     Multi-objective support: pass direction as a list of strings and
     objective_metric as a list of metric names. Example::
@@ -323,6 +325,9 @@ def run_hpo(
     Args:
         direction: 'maximize', 'minimize', or a list for multi-objective.
         objective_metric: Metric name or list of metric names for multi-objective.
+        method: Explicit mode selector. One of ``"local"``, ``"distributed"``,
+            ``"optimizer"``, ``"pymoo"``.  Overrides boolean flags
+            (distributed, use_hpo_optimizer).  Default None relies on flags.
     """
     ss = cond_search_space(
         base_space=search_space or _DEFAULT_SEARCH_SPACE,
@@ -331,7 +336,12 @@ def run_hpo(
         failures=failures,
     )
 
-    if use_hpo_optimizer:
+    # Resolve method from flags if not explicitly set
+    mode = method or (
+        "optimizer" if use_hpo_optimizer else ("distributed" if distributed else "local")
+    )
+
+    if mode == "optimizer":
         return _run_hpo_optimizer(
             script=script,
             n_trials=n_trials,
@@ -348,7 +358,7 @@ def run_hpo(
             param_prefix=param_prefix,
         )
 
-    if distributed:
+    if mode == "distributed":
         return _run_hpo_distributed(
             script=script,
             n_trials=n_trials,
@@ -368,6 +378,27 @@ def run_hpo(
             early_stop_min_reports=early_stop_min_reports,
         )
 
+    if mode == "pymoo":
+        # pymoo mode: builds an internal eval_fn from the script path
+        def _pymoo_eval_fn(params: dict[str, Any]) -> float | list[float]:
+            """Evaluate hyperparameters by running the training script."""
+            vals = _run_trial_local_multi(
+                script, params, metrics=[objective_metric] if isinstance(objective_metric, str) else objective_metric,  # type: ignore[arg-type]
+                loss=loss,
+            )
+            if vals is None or all(v is None for v in vals):
+                return _failed_value(direction[0] if isinstance(direction, list) else direction)
+            return vals if isinstance(direction, list) else vals[0]
+
+        return run_hpo_pymoo(
+            eval_fn=_pymoo_eval_fn,
+            search_space=ss,
+            n_trials=n_trials,
+            pop_size=min(n_trials, 20),
+            direction=direction,
+        )
+
+    # mode == "local" (default)
     return _run_hpo_local(
         script=script,
         n_trials=n_trials,
@@ -432,6 +463,9 @@ def _run_hpo_local(
     completed = 0
     failed = 0
 
+    # Register SearchGraph for trial history tracking
+    graph = SearchGraph()
+
     for trial_idx in range(n_trials):
         if timeout_minutes is not None:
             elapsed = (
@@ -449,6 +483,7 @@ def _run_hpo_local(
                     study.tell(trial=trial, values=values)
                 else:
                     study.tell(trial=trial, values=values[0])
+                graph.add_trial(trial.number, params, values, direction)
                 completed += 1
             else:
                 _tell_failed(study, trial, dirs[0] if not multi else dirs[0])
@@ -458,9 +493,11 @@ def _run_hpo_local(
             failed += 1
 
     duration = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
-    return _build_result(
+    result = _build_result(
         study, study_name, n_trials, completed, failed, direction, duration, timeout_minutes
     )
+    result["search_graph"] = graph.to_json()
+    return result
 
 
 # ── Distributed HPO (mode 2: ask/tell + clearml Task clone) ──
@@ -529,6 +566,9 @@ def _run_hpo_distributed(
     failed = 0
     pending: list[tuple[Any, dict[str, Any], Any]] = []
 
+    # Register SearchGraph for trial history tracking
+    graph = SearchGraph()
+
     for trial_idx in range(n_trials):
         if timeout_minutes is not None:
             elapsed = (
@@ -563,9 +603,10 @@ def _run_hpo_distributed(
                 timeout_minutes=timeout_minutes,
                 early_stop_threshold=early_stop_threshold,
                 early_stop_min_reports=early_stop_min_reports,
+                search_graph=graph,
             )
             if collected is not None:
-                c, f = collected
+                c, f, _ = collected if len(collected) >= 3 else (*collected, None)
                 completed += c
                 failed += f
 
@@ -580,18 +621,21 @@ def _run_hpo_distributed(
             timeout_minutes=timeout_minutes,
             early_stop_threshold=early_stop_threshold,
             early_stop_min_reports=early_stop_min_reports,
+            search_graph=graph,
         )
         if collected is not None:
-            c, f = collected
+            c, f, _ = collected if len(collected) >= 3 else (*collected, None)
             completed += c
             failed += f
 
     source_task.delete(force=True)
 
     duration = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
-    return _build_result(
+    result = _build_result(
         study, study_name, n_trials, completed, failed, direction, duration, timeout_minutes
     )
+    result["search_graph"] = graph.to_json()
+    return result
 
 
 def _should_early_stop(
@@ -668,7 +712,8 @@ def _collect_one_trial(
     use_combined_score: bool = False,
     early_stop_threshold: float | None = None,
     early_stop_min_reports: int = EARLY_STOP_MIN_REPORTS_DEFAULT,
-) -> tuple[int, int] | None:
+    search_graph: Any | None = None,
+) -> tuple[int, int] | tuple[int, int, Any] | None:
     """Wait for one pending trial to complete and report its result.
 
     Supports both single and multi-objective. For multi-objective, returns
@@ -676,6 +721,9 @@ def _collect_one_trial(
 
     When ``early_stop_threshold`` is set, periodically checks intermediate
     scalars and stops underperforming trials early.
+
+    When ``search_graph`` is provided (SearchGraph instance), completed
+    trials are registered for trial-history tracking.
     """
     if not pending:
         return None
@@ -704,18 +752,22 @@ def _collect_one_trial(
                             study.tell(trial=trial_obj, values=values)
                         else:
                             study.tell(trial=trial_obj, values=values[0])
-                        return (1, 0)
+                        if search_graph is not None:
+                            search_graph.add_trial(
+                                trial_obj.number, param, values, direction
+                            )
+                        return (1, 0, search_graph)
                     else:
                         study.tell(
                             trial=trial_obj,
                             values=_failed_value(direction[0] if multi else direction),
                         )
-                        return (0, 1)
+                        return (0, 1, search_graph)
                 else:
                     study.tell(
                         trial=trial_obj, values=_failed_value(direction[0] if multi else direction)
                     )
-                    return (0, 1)
+                    return (0, 1, search_graph)
             elif (
                 early_stop_threshold is not None
                 and status == "running"
@@ -1230,24 +1282,27 @@ def _load_trials_from_storage(
     except Exception:
         return []
 
-    is_maximize = direction == "maximize"
     trials: list[dict[str, Any]] = []
     for t in study.trials:
         val = t.value
         if val is None:
             continue
-        # Optuna internally minimizes everything.
-        # For maximize: it stores -value, so we negate back.
-        # For minimize: it stores value directly.
-        restored = val if not is_maximize else (-val if val is not None else None)
+        # Optuna stores the value as submitted by study.tell(values=...).
+        # For direction="maximize" with ask/tell, user submits the actual
+        # (positive) value — no sign flip needed here.  The sort below
+        # handles ordering regardless of direction.
+        # See Optuna docs: Study.tell does not transform user-supplied values.
         trials.append(
             {
                 "number": t.number,
-                "value": restored,
+                "value": val,
                 "params": dict(t.params) if t.params else {},
             }
         )
-    # Sort by value descending (best first, regardless of direction)
+    # Sort by value descending so that _load_trials_from_storage callers
+    # receive trials ordered best-first regardless of direction.
+    # Callers (like _narrow_space) that need ascending for "minimize"
+    # resort internally.
     trials.sort(key=lambda x: x["value"], reverse=True)
     return trials
 
@@ -1283,10 +1338,13 @@ def _narrow_space(
         return dict(search_space)
 
     top_n = max(1, int(len(trials) * top_frac))
-    if direction == "maximize":
-        sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=True)
+    # Assume trials are pre-sorted by value descending (from
+    # _load_trials_from_storage).  For minimize we need ascending order,
+    # so reverse the list.
+    if direction == "minimize":
+        sorted_trials = list(reversed(trials))
     else:
-        sorted_trials = sorted(trials, key=lambda t: t.get("value", 0) or 0, reverse=False)
+        sorted_trials = trials
     top_trials = sorted_trials[:top_n]
 
     narrowed: dict[str, dict[str, Any]] = {}
@@ -1533,12 +1591,12 @@ def _classify_training_curve(
     if max_val <= 0:
         return "linear"
 
-    # Plateau: last 50% of values have very small max-min relative to max
-    # Check BEFORE oscillating because a climb-then-plateau curve may have
-    # high overall CV but is clearly not oscillating.
+    # — Plateau check — executed first among shape checks because a
+    # climb-then-plateau curve may have high overall CV (oscillation signal)
+    # but is clearly not oscillating.  Uses a unified 0.05 threshold.
     if n >= 10:
         late_increase = max(late) - min(late)
-        if late_increase < 0.02 * max_val:
+        if late_increase < 0.05 * max_val:
             return "plateau"
 
     # Oscillating check: high coefficient of variation (std/mean)
@@ -1552,11 +1610,6 @@ def _classify_training_curve(
     early_max = max(early)
     if early_max >= 0.8 * max_val:
         return "sigmoid"
-
-    # Plateau: last 50% of values have very small max-min relative to max
-    late_increase = max(late) - min(late)
-    if late_increase < 0.05 * max_val and n >= 10:
-        return "plateau"
 
     return "linear"
 
@@ -1926,7 +1979,9 @@ def run_hpo_pymoo(
     )
 
     if verbose:
-        display = None
+        from pymoo.util.display import Display
+
+        display = Display()
     else:
         display = None
 
