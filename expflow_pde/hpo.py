@@ -65,15 +65,24 @@ TIME_DECAY_WINDOW_MINUTES: float = 120.0  # Minutes beyond TIME_MAX to decay to 
 # Note: ranges assume PDEBench FNO/DeepONet on 1D Burgers; adjust for
 # your equation / architecture / GPU memory budget.
 _DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
-    "lr": {"type": "float", "low": 1e-6, "high": 1e-2, "log": True},
-    "batch_size": {"type": "int", "low": 16, "high": 256, "step": 16},
-    "epochs": {"type": "int", "low": 20, "high": 150, "step": 10},
-    "weight_decay": {"type": "float", "low": 1e-8, "high": 1e-3, "log": True},
+    # PDEBench Task 1 (Burgers FNO) verified ranges — May 2026 experiments
+    "lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
+    # w64+cosine verified lr=1e-3 optimal, AdamW+wd diverges at 1e-3
+    "batch_size": {"type": "int", "low": 64, "high": 256, "step": 32},
+    # Sweep: 128 sweet spot, 256 works, 512 degrades (fewer gradient updates)
+    "epochs": {"type": "int", "low": 40, "high": 120, "step": 10},
+    # w64 peaks at epoch 60; >80 exceeds 60min time budget for n=500
+    "weight_decay": {"type": "float", "low": 0.0, "high": 1e-5, "log": True},
+    # 0 optimal for fresh train; AdamW+wd=1e-5 diverges under 60min constraint
     "dropout": {"type": "float", "low": 0.0, "high": 0.5, "step": 0.05},
-    "sub_step": {"type": "int", "low": 1, "high": 10, "step": 1},
+    "sub_step": {"type": "int", "low": 1, "high": 6, "step": 1},
+    # 5 best (exactly matches dt ratio 0.05/0.01); >6 degrades
     "width": {"type": "int", "low": 16, "high": 128, "step": 16},
-    "n_layers": {"type": "int", "low": 2, "high": 8, "step": 1},
+    # 64 far superior to 32 (+118% Seg); 16 underfits, 128 TBD
+    "n_layers": {"type": "int", "low": 2, "high": 6, "step": 1},
+    # 4 optimal; 8+ overparameterized at n=1000
     "modes": {"type": "int", "low": 8, "high": 32, "step": 4},
+    # 16 optimal; 24+ diminishing returns, 12 baseline
 }
 
 
