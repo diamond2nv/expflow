@@ -483,3 +483,63 @@ For deep clearml knowledge, refer to `~/wiki/clearml/`:
 | `advanced.md` | PipelineController / TaskScheduler / TriggerScheduler |
 | `clearml_data_vs_dvc.md` | clearml-data = DVC superset, concept mapping |
 | `tensorboardx_integration.md` | clearml × TensorBoardX auto-capture, zero-code |
+
+## Cross-Repository Dependencies
+
+This project is tightly coupled with `~/Gitlab/Agentic4Sci/hfpapers-crawler` (the
+paper discovery/ingestion pipeline). Before changing any module listed below, check
+the other repo first.
+
+| expflow Module | hfpapers Module | Coupling | Change Safeguard |
+|----------------|-----------------|----------|-------------------|
+| `semantic_client.py` | `semantic_service.py` (FastAPI sidecar) | HTTP REST at configurable URL | Endpoint path, payload schema, status codes must match |
+| `snowflake.py` | `paper_store.py` Snowflake | Ported (yitter drift, same base_time) | `_DRIFT_BASE_TIME` must stay identical |
+| `dispatch_db.py` | `paper_store.py` SQLite patterns | Architecture ported | Schema migration pattern, idempotency logic aligned |
+| `repair.py:_enrich_l2_with_semantics` | `semantic_client.py` → `semantic_service.py` | 2-hop call chain | Full link availability |
+| CLI chain | CLI chain — reverse pipeline | subprocess (`hfpclawer search` then `expflow analyze`) | Argument signatures compatible |
+
+## CodeGraph Integration
+
+CodeGraph (v0.9.3+) is installed and indexed for both repos. Use it during
+development, review, and testing.
+
+### Setup
+
+```bash
+# Already done — indexes are at:
+#   ~/Gitlab/Agentic4Sci/expflow/.codegraph/
+#   ~/Gitlab/Agentic4Sci/hfpapers-crawler/.codegraph/
+
+# Sync after changes (~100ms, incremental):
+cd ~/Gitlab/Agentic4Sci/expflow && npx codegraph sync
+cd ~/Gitlab/Agentic4Sci/hfpapers-crawler && npx codegraph sync
+```
+
+### Key Commands
+
+| When | Command | What you get |
+|------|---------|-------------|
+| Find a symbol/class/module | `npx codegraph query "SemanticClient"` | Exact file+line match |
+| Get full interface context | `npx codegraph context "SemanticClient"` | Class definition, methods, docstrings, callers, tests |
+| Browse project structure (with symbol counts) | `npx codegraph files` | Tree view showing each file's symbol count |
+| Find affected tests | `npx codegraph affected "expflow_pde/semantic_client.py"` | List of test files that import from the changed module |
+| Real-time MCP for Hermes | `npx codegraph serve --mcp` (auto-loaded by Hermes Agent via `~/.hermes/config.yaml`) | 4 tools: `codegraph_search`, `codegraph_context`, `codegraph_explore`, `codegraph_affected` |
+
+### Cross-Repo Limitation
+
+CodeGraph indexes **one repo at a time**. When you change `semantic_service.py`
+in hfpapers-crawler, CodeGraph will NOT detect that `expflow/repair.py` is
+affected. Always check the cross-repo table above manually when making
+cross-repo changes.
+
+### Hermes Agent Flow
+
+```
+User: "add a /embed endpoint that also returns model_name"
+Agent: 1. codegraph context "SemanticClient"        → sees embed/similarity/classify signatures
+       2. codegraph affected "semantic_client.py"   → sees test_semantic_client.py
+       3. Check cross-repo table                    → semantic_service.py needs matching change
+       4. cd hfpapers-crawler && codegraph context "semantic_service"  → gets FastAPI endpoint spec
+       5. cd hfpapers-crawler && codegraph affected "semantic_service.py" → gets service-side tests
+       6. Code both sides, run both test suites
+```
