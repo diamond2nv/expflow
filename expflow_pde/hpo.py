@@ -1,23 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""expflow hpo — Hyperparameter optimization runner.
+"""expflow hpo - Hyperparameter optimization runner.
 
 Supports three modes:
 1. **Local serial** (default): runs trials sequentially on this machine.
 2. **Distributed via clearml ask/tell**: each trial as independent clearml Task.
 3. **HyperParameterOptimizer** (recommended for production): uses ClearML's
-   native Optuna integration — auto-creates/clones/enqueues tasks.
+   native Optuna integration - auto-creates/clones/enqueues tasks.
 
-v0.9.0 enhancements:
-- combined_score(): competition-aware objective (seg_total × 0.75 + time_score)
-- cond_search_space(): narrow HPO ranges using diagnosis bias + OOM history
-- best_params clean: strip Args/ prefix, auto-cast strings to float
+== For third-party users ==
+
+All tunable defaults are module-level constants at the top of this file.
+Search for CAPACITY_KEYS, PRUNER_*, NARROW_*, HIERARCHICAL_*, etc.
+Override before calling run_hpo():
+
+    from expflow_pde import hpo
+    hpo.PRUNER_N_STARTUP_TRIALS = 10
+    hpo.NARROW_SHRINK_FACTOR = 0.3
+    hpo.HIERARCHICAL_STAGE1_FRAC = 0.3
+
+Key constants to adjust for your competition / dataset:
+
+  SEG_WEIGHT (0.75)            - Different competition metric mix
+  TIME_FULL_SCORE (35.0)       - Different time bonus scale
+  TIME_MAX_MINUTES (60.0)      - Different training time budget
+  PRUNER_HYPERBAND_MIN_RESOURCE (10) - Tutorial script uses more epochs
+  PRUNER_HYPERBAND_MAX_RESOURCE (200) - Max epochs across all trials
+  EARLY_STOP_MIN_REPORTS_DEFAULT (10) - Your training reports less often
+  HIERARCHICAL_STAGE1_FRAC (0.2) - More/less random exploration
+  _DEFAULT_SEARCH_SPACE values (various) - Your arch/equation differs
 
 The training script must:
-- Accept hyperparameters as CLI arguments: `--lr=0.001 --epochs=80`
-- Report metrics via clearml `Task.report_scalar()` for objective collection
-  (REQUIRED for mode 3 — HyperParameterOptimizer reads scalar metrics)
-- Report training wall time as `train_time_minutes` scalar for combined_score
+- Accept hyperparameters as CLI arguments: --lr=0.001 --epochs=80
+- Report metrics via clearml Task.report_scalar() for objective collection
+  (REQUIRED for mode 3 - HyperParameterOptimizer reads scalar metrics)
+- Report training wall time as train_time_minutes scalar for combined_score
 - Or output METRIC:<name>=<value> to stdout for local mode
 """
 
@@ -32,11 +49,91 @@ import time
 from typing import Any
 
 # ── Combined score: seg_total + train_time ──
+# These constants define how the competition's combined score is computed.
+# `combined_score = seg_total * SEG_WEIGHT + time_score`
+# time_score decays linearly from TIME_FULL_SCORE to 0 when train time
+# exceeds TIME_MAX_MINUTES, with full decay over TIME_DECAY_WINDOW_MINUTES.
+SEG_WEIGHT: float = 0.75  # Weight of seg_total in combined score
+TIME_FULL_SCORE: float = 35.0  # Maximum time bonus (achieved at TIME_MAX_MINUTES or under)
+TIME_MAX_MINUTES: float = 60.0  # Training time for full time_score
+TIME_DECAY_WINDOW_MINUTES: float = 120.0  # Minutes beyond TIME_MAX to decay to 0
 
-COMBINED_SEG_WEIGHT: float = 0.75
-COMBINED_TIME_MAX: float = 60.0  # minutes
-COMBINED_TIME_FULL_SCORE: float = 35.0
-COMBINED_TIME_DECAY_WINDOW: float = 120.0  # minutes beyond max → 0
+
+# ── Default hyperparameter search space ──
+# Each param: {"type": "float"|"int"|"categorical", "low": ..., "high": ..., ...}
+# Used by all three HPO modes. Users can override via `run_hpo(search_space=...)`.
+# Note: ranges assume PDEBench FNO/DeepONet on 1D Burgers; adjust for
+# your equation / architecture / GPU memory budget.
+_DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
+    "lr": {"type": "float", "low": 1e-6, "high": 1e-2, "log": True},
+    "batch_size": {"type": "int", "low": 16, "high": 256, "step": 16},
+    "epochs": {"type": "int", "low": 20, "high": 150, "step": 10},
+    "weight_decay": {"type": "float", "low": 1e-8, "high": 1e-3, "log": True},
+    "dropout": {"type": "float", "low": 0.0, "high": 0.5, "step": 0.05},
+    "sub_step": {"type": "int", "low": 1, "high": 10, "step": 1},
+    "width": {"type": "int", "low": 16, "high": 128, "step": 16},
+    "n_layers": {"type": "int", "low": 2, "high": 8, "step": 1},
+    "modes": {"type": "int", "low": 8, "high": 32, "step": 4},
+}
+
+
+# ── Conditional search space defaults ──
+# When OOM/signal failures accumulate, these params are capped at (low + high) / 2.
+CAPACITY_KEYS: set[str] = {"n_modes", "width", "batch_size", "n_layers"}
+# Epoch cap formula: min(original_high, max_train_minutes * EPOCHS_PER_MINUTE)
+# Used when constraints["max_train_minutes"] < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES.
+EPOCHS_PER_MINUTE: int = 2
+TIME_LIMIT_FOR_EPOCH_CAP_MINUTES: float = 60.0
+
+
+# ── Pruner defaults ──
+# These values are passed to Optuna pruner constructors when the user selects
+# a pruner type via `run_hpo(pruner="hyperband")`. Override by calling
+# `get_pruner(pruner_name)` directly with custom values.
+
+# HyperbandPruner: min_resource=max_resource/reduction_factor^max_n_brackets
+# Typical: 10 * 3^3 = 10 to 270 epoch range
+PRUNER_HYPERBAND_MIN_RESOURCE: int = 10
+PRUNER_HYPERBAND_MAX_RESOURCE: int = 200
+PRUNER_HYPERBAND_REDUCTION_FACTOR: int = 3
+
+# MedianPruner / PercentilePruner: common warmup parameters
+PRUNER_N_STARTUP_TRIALS: int = 5  # Trials before pruning kicks in
+PRUNER_N_WARMUP_STEPS: int = 10  # Epochs per trial before considering pruning
+PRUNER_PERCENTILE: float = 25.0  # Percentile threshold for PercentilePruner
+
+
+# ── Distributed HPO (ask/tell) polling defaults ──
+# _collect_one_trial waits for clearml tasks to complete.
+DEFAULT_POLL_INTERVAL_SEC: float = 5.0  # Seconds between poll iterations
+DEFAULT_TRIAL_TIMEOUT_MINUTES: float = 60.0  # Max wait per individual trial
+EARLY_STOP_MIN_REPORTS_DEFAULT: int = 10  # Min scalar reports before early-stop check
+EARLY_STOP_RECENT_N: int = 5  # Number of recent values to compare against threshold
+
+
+# ── _narrow_space defaults ──
+# Used by run_hpo_hierarchical to shrink search space around best trials.
+NARROW_TOP_FRAC: float = 0.2  # Fraction of best trials to analyze
+NARROW_SHRINK_FACTOR: float = 0.5  # New range = spread * factor / 2
+# If top-performer spread is below this fraction of original range,
+# fall back to MIN_SPREAD_FRAC * original_range
+NARROW_MIN_SPREAD_FRAC: float = 0.1
+NARROW_IDENTICAL_SPREAD_FRAC: float = 0.01
+
+
+# ── run_hpo_hierarchical defaults ──
+HIERARCHICAL_STAGE1_FRAC: float = 0.2  # Phase 1 trials = max(5, n_trials * STAGE1_FRAC)
+HIERARCHICAL_STAGE1_MIN: int = 5  # Minimum Phase 1 trials
+HIERARCHICAL_STAGE2_PRUNER: str = "hyperband"  # Optuna pruner for Phase 2
+
+
+# ── Combined score deprecation ──
+# These are kept for backward compatibility and will be removed in v0.12.
+# Use SEG_WEIGHT / TIME_FULL_SCORE / TIME_MAX_MINUTES / TIME_DECAY_WINDOW_MINUTES instead.
+COMBINED_SEG_WEIGHT: float = SEG_WEIGHT
+COMBINED_TIME_MAX: float = TIME_MAX_MINUTES
+COMBINED_TIME_FULL_SCORE: float = TIME_FULL_SCORE
+COMBINED_TIME_DECAY_WINDOW: float = TIME_DECAY_WINDOW_MINUTES
 
 
 def combined_score(seg_total: float, train_minutes: float) -> float:
@@ -100,14 +197,13 @@ def cond_search_space(
 
     # Step 2: Suppress capacity-increasing params after OOM failures
     if failures:
-        capacity_keys = {"n_modes", "width", "batch_size", "n_layers"}
         oom_types = {f.get("type", "") for f in failures if f.get("type") in ("oom", "signal")}
         if oom_types:
-            for key in capacity_keys:
+            for key in CAPACITY_KEYS:
                 if key in space:
                     spec = dict(space[key])
                     cur_high = spec.get("high", 999)
-                    # Cap at (low + high) / 2
+                    # Cap at (low + high) / 2 — conservative to avoid repeat OOM
                     half = (spec.get("low", 0) + cur_high) / 2.0
                     spec["high"] = half
                     space[key] = spec
@@ -115,31 +211,16 @@ def cond_search_space(
     # Step 3: Apply time constraints — limit epochs if tight on time
     if constraints and constraints.get("max_train_minutes"):
         max_min = constraints["max_train_minutes"]
-        if max_min < 60 and "epochs" in space:
+        if max_min < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES and "epochs" in space:
             spec = dict(space["epochs"])
             # Cap epochs to stay under time budget
-            spec["high"] = min(spec.get("high", 150), int(max_min * 2))
+            spec["high"] = min(spec.get("high", 150), int(max_min * EPOCHS_PER_MINUTE))
             space["epochs"] = spec
 
     return space
 
 
-# ── Default search space ──
-
-_DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
-    "lr": {"type": "float", "low": 1e-6, "high": 1e-2, "log": True},
-    "batch_size": {"type": "int", "low": 16, "high": 256, "step": 16},
-    "epochs": {"type": "int", "low": 20, "high": 150, "step": 10},
-    "weight_decay": {"type": "float", "low": 1e-8, "high": 1e-3, "log": True},
-    "dropout": {"type": "float", "low": 0.0, "high": 0.5, "step": 0.05},
-    "sub_step": {"type": "int", "low": 1, "high": 10, "step": 1},
-    "width": {"type": "int", "low": 16, "high": 128, "step": 16},
-    "n_layers": {"type": "int", "low": 2, "high": 8, "step": 1},
-    "modes": {"type": "int", "low": 8, "high": 32, "step": 4},
-}
-
-# Supported pruner types
-_PRUNER_TYPES: dict[str, Any] = {}
+# ── Pruner factory ──
 
 
 def _get_pruner(pruner_name: str | None = None) -> Any:
@@ -158,18 +239,18 @@ def _get_pruner(pruner_name: str | None = None) -> Any:
 
     pruner_map = {
         "hyperband": lambda: optuna.pruners.HyperbandPruner(
-            min_resource=10,
-            reduction_factor=3,
-            max_resource=200,
+            min_resource=PRUNER_HYPERBAND_MIN_RESOURCE,
+            reduction_factor=PRUNER_HYPERBAND_REDUCTION_FACTOR,
+            max_resource=PRUNER_HYPERBAND_MAX_RESOURCE,
         ),
         "median": lambda: optuna.pruners.MedianPruner(
-            n_startup_trials=5,
-            n_warmup_steps=10,
+            n_startup_trials=PRUNER_N_STARTUP_TRIALS,
+            n_warmup_steps=PRUNER_N_WARMUP_STEPS,
         ),
         "percentile": lambda: optuna.pruners.PercentilePruner(
-            percentile=25.0,
-            n_startup_trials=5,
-            n_warmup_steps=10,
+            percentile=PRUNER_PERCENTILE,
+            n_startup_trials=PRUNER_N_STARTUP_TRIALS,
+            n_warmup_steps=PRUNER_N_WARMUP_STEPS,
         ),
     }
     if pruner_name in pruner_map:
@@ -509,8 +590,8 @@ def _should_early_stop(
     task: Any,
     metric_name: str,
     threshold: float | None = None,
-    min_reports: int = 10,
-    recent_n: int = 5,
+    min_reports: int = EARLY_STOP_MIN_REPORTS_DEFAULT,
+    recent_n: int = EARLY_STOP_RECENT_N,
 ) -> bool:
     """Check if a running clearml task should be stopped early.
 
@@ -574,11 +655,11 @@ def _collect_one_trial(
     objective_metric: str | list[str],
     direction: str | list[str],
     optuna: Any,
-    poll_interval: float = 5.0,
-    timeout_minutes: float | None = 60.0,
+    poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
+    timeout_minutes: float | None = DEFAULT_TRIAL_TIMEOUT_MINUTES,
     use_combined_score: bool = False,
     early_stop_threshold: float | None = None,
-    early_stop_min_reports: int = 10,
+    early_stop_min_reports: int = EARLY_STOP_MIN_REPORTS_DEFAULT,
 ) -> tuple[int, int] | None:
     """Wait for one pending trial to complete and report its result.
 
@@ -1166,8 +1247,8 @@ def _load_trials_from_storage(
 def _narrow_space(
     trials: list[dict[str, Any]],
     search_space: dict[str, dict[str, Any]],
-    top_frac: float = 0.2,
-    shrink_factor: float = 0.5,
+    top_frac: float = NARROW_TOP_FRAC,
+    shrink_factor: float = NARROW_SHRINK_FACTOR,
     direction: str = "maximize",
 ) -> dict[str, dict[str, Any]]:
     """Narrow search space based on top-performing trial params.
@@ -1226,8 +1307,8 @@ def _narrow_space(
         best_mid = (best_min + best_max) / 2.0
         best_spread = best_max - best_min
         # If all top values are identical, use the original range as reference
-        if best_spread < orig_range * 0.01:
-            best_spread = orig_range * 0.1
+        if best_spread < orig_range * NARROW_IDENTICAL_SPREAD_FRAC:
+            best_spread = orig_range * NARROW_MIN_SPREAD_FRAC
 
         half_range = best_spread * shrink_factor * 0.5
         new_low = max(orig_low, best_mid - half_range)
@@ -1304,7 +1385,7 @@ def run_hpo_hierarchical(
     """
     ss = search_space or dict(_DEFAULT_SEARCH_SPACE)
     if n_stage1 is None:
-        n_stage1 = max(5, n_trials // 5)
+        n_stage1 = max(HIERARCHICAL_STAGE1_MIN, int(n_trials * HIERARCHICAL_STAGE1_FRAC))
     n_stage2 = n_trials - n_stage1
 
     base_ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1366,7 +1447,7 @@ def run_hpo_hierarchical(
         queue=queue,
         project=project,
         loss=loss,
-        pruner="hyperband",
+        pruner=HIERARCHICAL_STAGE2_PRUNER,
         **kwargs,
     )
 
