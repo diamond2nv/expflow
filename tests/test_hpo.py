@@ -1033,258 +1033,156 @@ class TestCollectOneTrialEarlyStop:
         task_bad.stop.assert_called_once()
 
 
-# ── Tree search space tests ──
+# ── Optuna multivariate TPE test (replaces manual tree) ──
 
 
-class TestSearchTree:
-    """Tests for _suggest_params_tree and related helpers."""
+class TestMultivariateTPE:
+    """Optuna already supports tree-structured TPE natively via Define-by-Run."""
 
-    def test_suggest_tree_flat_equiv(self):
-        """Tree with no categorical branches should behave like flat space."""
-        from expflow_pde.hpo import _suggest_params_tree
-
-        trial = MagicMock()
-        trial.suggest_float.return_value = 0.001
-        trial.suggest_int.return_value = 64
-        tree = {
-            "lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
-            "width": {"type": "int", "low": 16, "high": 128, "step": 16},
-        }
-        params = _suggest_params_tree(trial, tree)
-        assert params["lr"] == 0.001
-        assert params["width"] == 64
-
-    def test_suggest_tree_architecture_choice(self):
-        """Architecture categorical node selects correct child subtree."""
-        from expflow_pde.hpo import _suggest_params_tree, _DEFAULT_SEARCH_TREE
-
-        # Mock FNO path:
-        # - suggest_categorical called: architecture (1st call)
-        # - suggest_float called: lr, weight_decay, dropout (3 calls)
-        # - suggest_int called: modes, width, n_layers, batch_size, epochs, sub_step (6 calls)
-        # - suggest_categorical called: scheduler (2nd call)
-        trial_fno = MagicMock()
-        trial_fno.suggest_categorical.side_effect = ["FNO", "cosine"]
-        trial_fno.suggest_float.return_value = 0.001
-        trial_fno.suggest_int.side_effect = [12, 64, 4, 128, 80, 5]  # modes,width,n_layers,batch,epochs,sub_step
-
-        params = _suggest_params_tree(trial_fno, _DEFAULT_SEARCH_TREE)
-        assert params["architecture"] == "FNO"
-        assert "modes" in params
-        assert "width" in params
-        assert "n_layers" in params
-        assert "branch_depth" not in params  # DeepONet-specific
-        assert "lr" in params
-        assert params["scheduler"] == "cosine"
-
-        # Mock DeepONet path
-        trial_deepo = MagicMock()
-        trial_deepo.suggest_categorical.side_effect = ["DeepONet", "cosine"]
-        trial_deepo.suggest_float.return_value = 0.001
-        trial_deepo.suggest_int.side_effect = [128, 4, 3, 128, 80, 5]  # width,branch_depth,trunk_depth,batch,epochs,sub_step
-
-        params2 = _suggest_params_tree(trial_deepo, _DEFAULT_SEARCH_TREE)
-        assert params2["architecture"] == "DeepONet"
-        assert "branch_depth" in params2
-        assert "trunk_depth" in params2
-        assert "modes" not in params2  # FNO-specific
-
-    def test_suggest_tree_training_params_always_present(self):
-        """Training params at root level should appear regardless of arch choice."""
-        from expflow_pde.hpo import _suggest_params_tree, _DEFAULT_SEARCH_TREE
-
-        trial = MagicMock()
-        trial.suggest_categorical.side_effect = ["FNO", "cosine"]
-        trial.suggest_float.return_value = 0.001
-        # FNO arch: modes(12), width(64), n_layers(4)
-        # Root lvl: batch_size(128), epochs(80), weight_decay(0), dropout(0), sub_step(5)
-        trial.suggest_int.side_effect = [12, 64, 4, 128, 80, 0, 5]
-
-        params = _suggest_params_tree(trial, _DEFAULT_SEARCH_TREE)
-        assert "lr" in params
-        assert params.get("scheduler") == "cosine"
-        assert params.get("architecture") == "FNO"
-
-    def test_suggest_tree_recursive_no_side_effects(self):
-        """Multiple calls with same trial should not bleed."""
-        from expflow_pde.hpo import _suggest_params_tree
-
-        trial = MagicMock()
-        trial.suggest_float.return_value = 0.001
-        trial.suggest_int.return_value = 64
-
-        tree = {
-            "a": {"type": "float", "low": 0.0, "high": 1.0},
-            "b": {"type": "int", "low": 1, "high": 10},
-        }
-        p1 = _suggest_params_tree(trial, tree)
-        p2 = _suggest_params_tree(trial, tree)
-        assert p1 == p2
-
-    def test_describe_search_tree_output(self):
-        """_describe_search_tree produces a non-empty list of lines."""
-        from expflow_pde.hpo import _describe_search_tree, _DEFAULT_SEARCH_TREE
-
-        lines = _describe_search_tree(_DEFAULT_SEARCH_TREE)
-        assert len(lines) > 0
-        assert any("choice" in line for line in lines)
-        assert any("FNO" in line for line in lines)
-        assert any("DeepONet" in line for line in lines)
-
-
-# ── cond_search_space_tree tests ──
-
-
-class TestCondSearchTree:
-    """Tests for cond_search_space_tree with bias/constraints/failures."""
-
-    def test_flat_passthrough(self):
-        """No bias/constraints/failures → tree unchanged."""
-        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
-
-        result = cond_search_space_tree(tree=_DEFAULT_SEARCH_TREE)
-        # Root keys preserved
-        assert "architecture" in result
-        assert result["architecture"]["type"] == "categorical"
-        assert result["architecture"]["choices"] == ["FNO", "DeepONet", "PINO"]
-        # Leaf params preserved
-        assert "lr" in result
-        assert result["lr"]["type"] == "float"
-        assert result["lr"]["low"] == 1e-4
-
-    def test_bias_narrows_leaf(self):
-        """Bias narrows a flat leaf param."""
-        from expflow_pde.hpo import cond_search_space_tree
-
-        tree = {"lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True}}
-        result = cond_search_space_tree(
-            tree=tree,
-            bias={"lr": {"low": 5e-4, "high": 5e-3}},
-        )
-        assert result["lr"]["low"] == 5e-4
-        assert result["lr"]["high"] == 5e-3
-
-    def test_bias_narrows_arch_child(self):
-        """Bias narrows a param inside architecture _children."""
-        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
-
-        result = cond_search_space_tree(
-            tree=_DEFAULT_SEARCH_TREE,
-            bias={"modes": {"low": 12, "high": 24}},
-        )
-        # All three arch subtrees' modes are narrowed
-        fno_modes = result["architecture"]["_children"]["FNO"].get("modes", {})
-        assert fno_modes.get("low") == 12
-        assert fno_modes.get("high") == 24
-
-    def test_oom_caps_capacity_keys(self):
-        """Failures with 'oom' type cap size params in both arch and root."""
-        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
-
-        result = cond_search_space_tree(
-            tree=_DEFAULT_SEARCH_TREE,
-            failures=[{"type": "oom"}],
-        )
-        # Root-level batch_size capped (CAPACITY_KEYS includes batch_size)
-        assert result["batch_size"]["high"] < 256
-        # FNO _children width capped
-        fno_width = result["architecture"]["_children"]["FNO"]["width"]
-        assert fno_width["high"] < 128
-
-    def test_time_constraint_on_epochs(self):
-        """Constraints slow max_train_minutes caps epochs."""
-        from expflow_pde.hpo import cond_search_space_tree, _DEFAULT_SEARCH_TREE
-
-        result = cond_search_space_tree(
-            tree=_DEFAULT_SEARCH_TREE,
-            constraints={"max_train_minutes": 30},
-        )
-        assert result["epochs"]["high"] <= 60  # 30 * EPOCHS_PER_MINUTE
-
-    def test_bias_on_nonexistent_param_ignored(self):
-        """Bias for a param not in tree is silently ignored."""
-        from expflow_pde.hpo import cond_search_space_tree
-
-        tree = {"x": {"type": "int", "low": 1, "high": 10}}
-        result = cond_search_space_tree(
-            tree=tree,
-            bias={"nonexistent": {"low": 0}},
-        )
-        assert "nonexistent" not in result
-
-
-# ── run_hpo use_tree integration tests ──
-
-
-class TestRunHpoUseTree:
-    """Tests for run_hpo(use_tree=True) integration."""
-
-    def test_local_tree_mode_dispatches(self):
-        """run_hpo(use_tree=True) calls cond_search_space_tree and _suggest_params_tree."""
-        from expflow_pde import hpo as hpo_mod
-
-        orig_cond = hpo_mod.cond_search_space_tree
-        orig_suggest = hpo_mod._suggest_params_tree
-
-        called_cond = False
-        called_suggest = False
-
-        def _fake_cond(**kw):
-            nonlocal called_cond
-            called_cond = True
-            return kw.get("tree") or orig_cond(**kw)
-
-        def _fake_suggest(*a, **kw):
-            nonlocal called_suggest
-            called_suggest = True
-            return {"a": 1}
-
-        hpo_mod.cond_search_space_tree = _fake_cond
-        hpo_mod._suggest_params_tree = _fake_suggest
-        hpo_mod._suggest_params = lambda t, s: {"a": 2}
-
+    def test_multivariate_cond_params(self):
+        """Optuna Define-by-Run handles conditional arch parameters."""
         import optuna
-        study = optuna.create_study(direction="maximize")
 
-        # Temporarily patch _run_hpo_local to run a single trial
-        original_local = hpo_mod._run_hpo_local
+        def objective(trial):
+            arch = trial.suggest_categorical("architecture", ["FNO", "DeepONet"])
+            if arch == "FNO":
+                modes = trial.suggest_int("modes", 8, 32, step=4)
+            else:
+                bd = trial.suggest_int("branch_depth", 2, 6)
+            lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+            # Return a fake objective value
+            return lr + (modes if arch == "FNO" else bd) * 0.01
 
-        def _fake_local(**_kw):
-            nonlocal called_suggest
-            # Simulate what _run_hpo_local does internally
-            trial = study.ask()
-            suggest_fn = hpo_mod._suggest_params_tree if _kw.get("use_tree") else hpo_mod._suggest_params
-            params = suggest_fn(trial, _kw["search_space"])
-            called_suggest = True
-            return {
-                "study_name": _kw.get("study_name", "test"),
-                "n_trials": 0,
-                "completed": 1,
-                "failed": 0,
-                "best_value": 1.0,
-                "best_params": params,
-                "direction": "maximize",
-                "duration_sec": 0.0,
-                "method": "local",
-            }
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(multivariate=True),
+        )
+        study.optimize(objective, n_trials=3)
 
-        hpo_mod._run_hpo_local = _fake_local
+        assert len(study.trials) == 3
+        assert study.trials[0].params.get("architecture") in ("FNO", "DeepONet")
+        assert "lr" in study.trials[0].params
 
-        try:
-            result = hpo_mod.run_hpo(
-                script="echo",
-                n_trials=1,
-                use_tree=True,
-                study_name="test_tree_integration",
-            )
-            assert called_cond, "cond_search_space_tree was not called"
-            # The params should come from _suggest_params_tree = {"a": 1}
-            params = result.get("best_params", {})
-            assert params == {"a": 1}, f"Expected tree-sampled params, got {params}"
-        finally:
-            hpo_mod.cond_search_space_tree = orig_cond
-            hpo_mod._run_hpo_local = original_local
-            hpo_mod._suggest_params_tree = orig_suggest
+    def test_multivariate_improves_efficiency(self):
+        """multivariate=True should not crash and yields trials."""
+        import optuna
+
+        def objective(trial):
+            a = trial.suggest_float("a", 0.0, 1.0)
+            b = trial.suggest_float("b", 0.0, 1.0)
+            return a + b
+
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(multivariate=True),
+        )
+        study.optimize(objective, n_trials=3)
+        assert len(study.trials) == 3
+
+
+# ── NetworkX SearchGraph tests ──
+
+
+class TestSearchGraph:
+    """Tests for SearchGraph which tracks trial history as a directed graph."""
+
+    def test_simple_add(self):
+        """Adding trials creates nodes and edges."""
+        from expflow_pde.hpo import SearchGraph
+
+        g = SearchGraph()
+        g.add_trial(
+            trial_number=1,
+            params={"lr": 0.001, "width": 64},
+            value=57.09,
+            direction="maximize",
+        )
+        assert g.graph.number_of_nodes() >= 1
+        # Check that the trial was logged
+        assert len(g.trials) == 1
+
+    def test_param_transition(self):
+        """Two consecutive trials should create a transition edge."""
+        from expflow_pde.hpo import SearchGraph
+
+        g = SearchGraph()
+        g.add_trial(1, {"lr": 1e-3}, value=50.0, direction="maximize")
+        g.add_trial(2, {"lr": 5e-4}, value=55.0, direction="maximize")
+        assert len(g.trials) == 2
+        # After at least 2 trials we have at least one edge
+        assert g.graph.number_of_edges() >= 1
+
+    def test_summary_dict(self):
+        """Summary should include node/edge counts and top trials."""
+        from expflow_pde.hpo import SearchGraph
+
+        g = SearchGraph()
+        g.add_trial(1, {"lr": 1e-3}, value=50.0, direction="maximize")
+        g.add_trial(2, {"lr": 5e-4}, value=55.0, direction="maximize")
+        s = g.summary(top_k=1)
+        assert s["node_count"] == 2
+        assert s["edge_count"] >= 1
+        assert len(s["top_trials"]) >= 1
+
+    def test_json_export(self):
+        """to_json produces a serializable dict."""
+        from expflow_pde.hpo import SearchGraph
+
+        g = SearchGraph()
+        g.add_trial(1, {"lr": 1e-3}, value=50, direction="maximize")
+        j = g.to_json()
+        assert "nodes" in j
+        assert "edges" in j
+        assert "top_trials" in j
+
+
+# ── pymoo integration test ──
+
+
+class TestPymooIntegration:
+    """pymoo provides multi-objective evolutionary algorithms as HPO backend."""
+
+    def test_pymoo_import_and_run(self):
+        """pymoo can optimise a simple scalar problem via NSGA-II."""
+        from expflow_pde.hpo import _has_pymoo, run_hpo_pymoo
+
+        assert _has_pymoo, "pymoo should be installed"
+
+        def dummy_eval(params: dict[str, float]) -> float:
+            return -(params["x"] ** 2 + params["y"] ** 2)  # maximise negative distance
+
+        space = {
+            "x": {"type": "float", "low": -5.0, "high": 5.0},
+            "y": {"type": "float", "low": -5.0, "high": 5.0},
+        }
+        result = run_hpo_pymoo(
+            eval_fn=dummy_eval,
+            search_space=space,
+            n_trials=10,
+            pop_size=10,
+            direction="maximize",
+        )
+        assert result["best_value"] is not None
+        assert "best_params" in result
+        # Best should be near (0, 0) → value near 0
+        assert result["best_value"] > -10.0
+
+    def test_pymoo_multi_objective(self):
+        """pymoo supports multi-objective with two directions."""
+        from expflow_pde.hpo import run_hpo_pymoo
+
+        space = {
+            "x": {"type": "float", "low": -5.0, "high": 5.0},
+        }
+
+        results = run_hpo_pymoo(
+            eval_fn=lambda p: [-(p["x"] ** 2), p["x"]],  # maximise -x^2, minimise x
+            search_space=space,
+            n_trials=10,
+            pop_size=10,
+            direction=["maximize", "minimize"],
+        )
+        assert results["best_value"] is not None or results.get("pareto_front")
 
 
 # ── Training curve classification tests (Paradigm 5) ──

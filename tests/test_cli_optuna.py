@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for expflow CLI — optuna command group.
 
-Covers: search-tree command, help output, pareto command (basic).
+Covers: study-graph command, help output, pareto command (basic).
 Uses typer.testing.CliRunner to invoke CLI without subprocess.
 """
 
@@ -29,51 +29,39 @@ def reset_config():
     yield
 
 
-class TestSearchTreeCLI:
-    """Tests for ``expflow optuna search-tree``."""
+class TestStudyGraphCLI:
+    """Tests for ``expflow optuna study-graph``."""
 
     def test_help_output(self, runner: CliRunner):
-        """search-tree --help shows description and options."""
+        """study-graph --help shows description and options."""
         from expflow_pde.cli_optuna import optuna_app
 
-        result = runner.invoke(optuna_app, ["search-tree", "--help"])
+        result = runner.invoke(optuna_app, ["study-graph", "--help"])
         assert result.exit_code == 0
-        assert "search-tree" in result.output.lower()
+        assert "study-graph" in result.output.lower()
         assert "--json" in result.output
 
-    def test_ascii_tree_output(self, runner: CliRunner):
-        """search-tree (no args) shows ascii tree with architecture choices."""
+    def test_empty_graph(self, runner: CliRunner):
+        """study-graph with no study shows a meaningful message."""
         from expflow_pde.cli_optuna import optuna_app
 
-        result = runner.invoke(optuna_app, ["search-tree"])
-        assert result.exit_code == 0
-        assert "FNO" in result.output
-        assert "DeepONet" in result.output
-        assert "choice" in result.output
-        assert "Search Tree:" in result.output
-
-    def test_json_output(self, runner: CliRunner):
-        """search-tree --json outputs parseable JSON."""
-        from expflow_pde.cli_optuna import optuna_app
-
-        result = runner.invoke(optuna_app, ["search-tree", "--json"])
+        result = runner.invoke(optuna_app, ["study-graph", "--json"])
+        # Should produce valid json with empty graph, not crash
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "architecture" in data
-        assert data["architecture"]["type"] == "categorical"
-        assert "FNO" in data["architecture"]["_children"]
+        assert "nodes" in data
+        assert "edges" in data
 
-    def test_json_output_valid_structure(self, runner: CliRunner):
-        """JSON output matches the _DEFAULT_SEARCH_TREE schema."""
+    def test_json_output_structure(self, runner: CliRunner):
+        """JSON output includes nodes, edges, top_trials."""
         from expflow_pde.cli_optuna import optuna_app
-        from expflow_pde.hpo import _DEFAULT_SEARCH_TREE
 
-        result = runner.invoke(optuna_app, ["search-tree", "--json"])
+        result = runner.invoke(optuna_app, ["study-graph", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        # Verify structure matches tree constant
-        assert set(data.keys()) == set(_DEFAULT_SEARCH_TREE.keys())
-        assert data["architecture"]["choices"] == _DEFAULT_SEARCH_TREE["architecture"]["choices"]
+        assert "nodes" in data
+        assert "edges" in data
+        assert "top_trials" in data
 
 
 class TestParetoCLI:

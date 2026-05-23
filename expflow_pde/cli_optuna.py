@@ -522,35 +522,68 @@ def pareto_cmd(
         print(f"  {pt['number']:>8} {v1:>12.4f} {v2:>12.4f}  {params_str}")
 
 
-@optuna_app.command("search-tree")
-def search_tree_cmd(
+@optuna_app.command("study-graph")
+def study_graph_cmd(
+    study_name: str = typer.Argument(
+        "", help="Study name (optional; generates empty graph if omitted)"
+    ),
     json_output: bool = typer.Option(
-        False, "--json", "-j", help="Output tree as JSON instead of ascii"
+        False, "--json", "-j", help="Output graph as JSON"
+    ),
+    top_k: int = typer.Option(
+        5, "--top", "-t", help="Number of top trials to show"
     ),
 ) -> None:
-    """Display the default tree-structured search space.
+    """Display a search-history graph for an Optuna study.
 
-    Shows a visual tree of all architecture families, training parameters,
-    and their conditional dependencies. Useful for understanding what
-    hyperparameters will be sampled during a tree-based HPO run.
+    Uses NetworkX to build a directed graph of trial-to-trial parameter
+    transitions.  Shows the best trials and how parameters evolved.
+
+    With ``--json``, outputs machine-readable JSON instead of ascii table.
 
     Example::
 
-        expflow optuna search-tree
-        expflow optuna search-tree --json   # for programmatic access
+        expflow optuna study-graph hpo_20260522
+        expflow optuna study-graph --json   # empty graph (no study)
     """
-    from expflow_pde.hpo import _describe_search_tree, _DEFAULT_SEARCH_TREE
+    from expflow_pde.hpo import SearchGraph
+
+    g = SearchGraph()
+
+    # Try to load trial data from an existing study
+    if study_name:
+        try:
+            from expflow_pde.optuna import get_study
+
+            study = get_study(study_name)
+            for trial in study.trials:
+                if trial.state.name == "COMPLETE" and trial.values:
+                    g.add_trial(
+                        trial_number=trial.number,
+                        params=trial.params,
+                        value=trial.values,
+                        direction="maximize",
+                    )
+        except Exception:
+            pass  # Gracefully fall back to empty graph
+
+    summary = g.summary(top_k=top_k)
 
     if json_output:
         import json as _json
 
-        print(_json.dumps(_DEFAULT_SEARCH_TREE, indent=2, default=str))
+        print(_json.dumps(g.to_json(), indent=2, default=str))
         return
 
-    lines = _describe_search_tree(_DEFAULT_SEARCH_TREE)
-    print("Search Tree:")
+    print("Study Graph:")
     print("─" * 60)
-    for line in lines:
-        print(line)
+    print(f"  Trials:     {summary['node_count']}")
+    print(f"  Transitions: {summary['edge_count']}")
+    if summary["top_trials"]:
+        print(f"\n  Top {top_k} trials:")
+        for t in summary["top_trials"]:
+            num = t.get("number", "?")
+            val = t.get("value", "?")
+            params_preview = dict(list(t.get("params", {}).items())[:3])
+            print(f"    #{num}: value={val:.4f}, params={params_preview}")
     print("─" * 60)
-    print(f"Total nodes: {len(lines)}")

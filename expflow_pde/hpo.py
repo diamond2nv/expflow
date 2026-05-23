@@ -86,202 +86,6 @@ _DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
 }
 
 
-# ── Tree-structured search space ──
-# A search tree supports conditional parameter dependencies: the set of
-# hyperparameters to sample depends on a prior choice (architecture family,
-# scheduler type, etc.).  Each tree node is one of:
-#
-#   Leaf dict: ―  same format as _DEFAULT_SEARCH_SPACE (flat param → spec)
-#   Categorical node:  {"type": "categorical", "choices": [...]}
-#     + child dict keyed by each choice (or a "__default__" fallback)
-#   Branch node:  same format, but precedes a nested "_children" key
-#
-# Schema (recursive):
-#   SearchTree = dict[str, TreeNode]
-#   TreeNode   = ParamSpec        |  # leaf: sample and stop
-#                 CategoricalSpec  |  # choice → recurse into children
-#                 dict[str, TreeNode]  # implicit branch: just recurse
-#   ParamSpec      = {"type": "float"|"int", "low": ..., "high": ..., ...}
-#   CategoricalSpec = {"type": "categorical", "choices": [...],
-#                      "_children": dict[str, SearchTree]}
-#
-# When "_children" is present, every child subtree is sampled with the
-# choice's value available as a sampled parameter (named after this node).
-
-_DEFAULT_SEARCH_TREE: dict[str, Any] = {
-    "architecture": {
-        "type": "categorical",
-        "choices": ["FNO", "DeepONet", "PINO"],
-        "_children": {
-            "FNO": {
-                "modes": {"type": "int", "low": 8, "high": 32, "step": 4},
-                "width": {"type": "int", "low": 16, "high": 128, "step": 16},
-                "n_layers": {"type": "int", "low": 2, "high": 6, "step": 1},
-            },
-            "DeepONet": {
-                "width": {"type": "int", "low": 32, "high": 256, "step": 32},
-                "branch_depth": {"type": "int", "low": 2, "high": 6, "step": 1},
-                "trunk_depth": {"type": "int", "low": 2, "high": 6, "step": 1},
-            },
-            "PINO": {
-                "pde_loss_weight": {
-                    "type": "float", "low": 1e-4, "high": 1.0, "log": True,
-                },
-                "phys_freq": {"type": "categorical", "choices": [1, 5, 10, 20]},
-            },
-        },
-    },
-    # Training params are flat at root level (no prefix) so that
-    # downstream CLI / training scripts receive --lr, --batch_size etc.
-    "lr": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
-    "batch_size": {"type": "int", "low": 64, "high": 256, "step": 32},
-    "epochs": {"type": "int", "low": 40, "high": 120, "step": 10},
-    "weight_decay": {"type": "float", "low": 0.0, "high": 1e-5, "log": True},
-    "dropout": {"type": "float", "low": 0.0, "high": 0.5, "step": 0.05},
-    "sub_step": {"type": "int", "low": 1, "high": 6, "step": 1},
-    "scheduler": {
-        "type": "categorical",
-        "choices": ["cosine", "step", "none"],
-    },
-}
-"""
-Tree-structured search space with conditional parameter dependencies.
-
-Root level divides parameters into families:
-  - ``architecture``: categorical choice (FNO / DeepONet / PINO) that
-    determines which architecture-specific params are sampled.
-  - ``training``: flat sub-space shared by all architectures.
-
-Usage::
-
-    from expflow_pde.hpo import _suggest_params_tree
-    params = _suggest_params_tree(optuna_trial, _DEFAULT_SEARCH_TREE)
-    # -> {"architecture": "FNO", "modes": 16, "width": 64,
-    #     "lr": 0.001, "batch_size": 128, ...}
-"""
-
-
-def _suggest_params_tree(
-    trial: Any,
-    tree: dict[str, Any],
-    prefix: str = "",
-) -> dict[str, Any]:
-    """Recursively sample hyperparameters from a tree-structured space.
-
-    Args:
-        trial: Optuna ``Trial`` object (must have ``suggest_*`` methods).
-        tree: Search tree following the ``_DEFAULT_SEARCH_TREE`` schema.
-        prefix: Optional namespace prefix for parameter names (e.g. ``"arch/"``).
-
-    Returns:
-        Flat dict of sampled parameter names → values.
-    """
-    params: dict[str, Any] = {}
-    for key, spec in tree.items():
-        name = f"{prefix}{key}" if prefix else key
-
-        _suggest_tree_recursive(trial, params, name, spec)
-
-    return params
-
-
-def _suggest_tree_recursive(
-    trial: Any,
-    params: dict[str, Any],
-    name: str,
-    spec: Any,
-) -> None:
-    """Recursive helper for ``_suggest_params_tree``.
-
-    Modifies ``params`` in-place.
-    """
-    if not isinstance(spec, dict):
-        return
-
-    ptype = spec.get("type")
-
-    if ptype == "categorical":
-        choices = spec["choices"]
-        chosen = trial.suggest_categorical(name, choices)
-
-        # This choice itself is a sampled param
-        # (cast to Python native type for JSON-safe output)
-        if isinstance(chosen, type("")):
-            pass
-        params[name] = chosen
-
-        # Recurse into children subtrees if present
-        children: dict | None = spec.get("_children")
-        if children is not None:
-            child_tree = children.get(chosen) or children.get("__default__")
-            if child_tree is not None:
-                for ck, cv in child_tree.items():
-                    _suggest_tree_recursive(trial, params, ck, cv)
-        return
-
-    if ptype in ("float", "int"):
-        if ptype == "float":
-            params[name] = trial.suggest_float(
-                name,
-                spec["low"],
-                spec["high"],
-                log=spec.get("log", False),
-                step=spec.get("step"),
-            )
-        else:
-            params[name] = trial.suggest_int(
-                name,
-                spec["low"],
-                spec["high"],
-                step=spec.get("step", 1),
-            )
-        return
-
-    # Plain dict without "type" → it's an implicit branch, recurse
-    for k, v in spec.items():
-        _suggest_tree_recursive(trial, params, f"{name}.{k}", v)
-
-
-def _describe_search_tree(tree: dict[str, Any], indent: int = 0) -> list[str]:
-    """Flatten a search tree into human-readable description lines.
-
-    Used by the ``expflow optuna search-tree`` CLI command.
-    """
-    lines: list[str] = []
-    pad = "  " * indent
-    for key, spec in tree.items():
-        if not isinstance(spec, dict):
-            lines.append(f"{pad}{key}: {spec}")
-            continue
-        ptype = spec.get("type")
-        if ptype == "categorical":
-            choices = spec["choices"]
-            desc = f"choice ∈ {choices}"
-            lines.append(f"{pad}├─ {key}: {desc}")
-            children: dict | None = spec.get("_children")
-            if children:
-                for choice, subtree in children.items():
-                    lines.append(f"{pad}│  └─ [{choice}]:")
-                    lines.extend(_describe_search_tree(subtree, indent + 2))
-        elif ptype in ("float", "int"):
-            low = spec.get("low", "?")
-            high = spec.get("high", "?")
-            log = spec.get("log", False)
-            step = spec.get("step")
-            desc = f"[{low}, {high}]"
-            if log:
-                desc += " (log)"
-            if step is not None:
-                desc += f" step={step}"
-            lines.append(f"{pad}├─ {key}: {desc}")
-        elif ptype == "choices":
-            lines.append(f"{pad}├─ {key}: choice ∈ {spec.get('choices', [])}")
-        else:
-            lines.append(f"{pad}├─ {key}: (branch)")
-            lines.extend(_describe_search_tree(spec, indent + 1))
-    return lines
-
-
 # ── Conditional search space defaults ──
 # When OOM/signal failures accumulate, these params are capped at (low + high) / 2.
 CAPACITY_KEYS: set[str] = {"n_modes", "width", "batch_size", "n_layers"}
@@ -425,83 +229,6 @@ def cond_search_space(
     return space
 
 
-def cond_search_space_tree(
-    tree: dict[str, Any] | None = None,
-    bias: dict[str, dict[str, float]] | None = None,
-    constraints: dict[str, Any] | None = None,
-    failures: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Conditional tree search space: narrow ranges based on diagnosis and history.
-
-    Recursively walks the search tree and applies bias/constraints/failures
-    to every leaf (``float``/``int``) parameter node.
-
-    Args:
-        tree: Search tree (uses ``_DEFAULT_SEARCH_TREE`` if None).
-        bias: From suggest_next_params — dict of {param: {"low": ..., "high": ...}}.
-        constraints: Time budget etc. {"max_train_minutes": float}.
-        failures: From GoalOrchestrator.load()["learned_failures"].
-
-    Returns:
-        Modified search tree with narrowed ranges on leaf params.
-    """
-    tree = tree or _DEFAULT_SEARCH_TREE
-
-    def _walk_and_apply(node: Any) -> Any:
-        """Recursive walk: clone dicts, apply bias to leaf specs."""
-        if not isinstance(node, dict):
-            return node
-        result: dict[str, Any] = {}
-        for key, val in node.items():
-            if key == "_children":
-                # Recurse into children subtrees
-                result[key] = {k: _walk_and_apply(v) for k, v in val.items()}
-            elif isinstance(val, dict) and val.get("type") in ("float", "int", "categorical"):
-                # Categorical nodes with _children must recurse
-                _has_children = "_children" in val and isinstance(val["_children"], dict)
-                if val.get("type") in ("float", "int") and bias and key in bias:
-                    spec = dict(val)
-                    b = bias[key]
-                    low = b.get("low")
-                    high = b.get("high")
-                    if low is not None:
-                        spec["low"] = float(low) if isinstance(spec.get("low", 0), (int, float)) else low
-                    if high is not None:
-                        spec["high"] = float(high) if isinstance(spec.get("high", 0), (int, float)) else high
-                    result[key] = spec
-                else:
-                    result[key] = dict(val)
-
-                # Recurse into _children for categorical nodes with child subtrees
-                if _has_children:
-                    result[key]["_children"] = {
-                        k: _walk_and_apply(v) for k, v in val["_children"].items()
-                    }
-
-                # OOM suppression
-                if failures and key in CAPACITY_KEYS:
-                    oom_types = {f.get("type", "") for f in failures if f.get("type") in ("oom", "signal")}
-                    if oom_types:
-                        spec = dict(result[key])
-                        cur_high = spec.get("high", 999)
-                        half = (spec.get("low", 0) + cur_high) / 2.0
-                        spec["high"] = half
-                        result[key] = spec
-
-                # Time constraint on epochs
-                if key == "epochs" and constraints and constraints.get("max_train_minutes"):
-                    max_min = constraints["max_train_minutes"]
-                    if max_min < TIME_LIMIT_FOR_EPOCH_CAP_MINUTES:
-                        spec = dict(result[key])
-                        spec["high"] = min(spec.get("high", 150), int(max_min * EPOCHS_PER_MINUTE))
-                        result[key] = spec
-            else:
-                result[key] = _walk_and_apply(val)
-        return result
-
-    return _walk_and_apply(tree)
-
-
 # ── Pruner factory ──
 
 
@@ -576,7 +303,6 @@ def run_hpo(
     param_prefix: str = "Args/",
     early_stop_threshold: float | None = None,
     early_stop_min_reports: int = 10,
-    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run hyperparameter optimization.
 
@@ -586,39 +312,24 @@ def run_hpo(
     3. **hpo_optimizer** (use_hpo_optimizer=True): ClearML HyperParameterOptimizer.
 
     Multi-objective support: pass direction as a list of strings and
-    objective_metric as a list of metric names. Example:
+    objective_metric as a list of metric names. Example::
+
         run_hpo(..., direction=["maximize", "minimize"],
                 objective_metric=["seg_total", "train_time_minutes"])
-
-    When ``use_tree=True``, the search space is treated as a tree-structured
-    space with conditional parameter dependencies (see ``_DEFAULT_SEARCH_TREE``).
-    The ``search_space`` parameter must then be a tree dict, and parameters
-    are sampled via ``_suggest_params_tree()`` instead of ``_suggest_params()``.
-    When ``search_space`` is omitted with ``use_tree=True``, ``_DEFAULT_SEARCH_TREE``
-    is used automatically.
 
     When ``early_stop_threshold`` is set (distributed mode), trials whose
     intermediate scalar values fall below the threshold are stopped early.
 
     Args:
-        ...
-        use_tree: If True, use tree-structured search space sampling
-                  (``_DEFAULT_SEARCH_TREE`` or the one provided via ``search_space``).
+        direction: 'maximize', 'minimize', or a list for multi-objective.
+        objective_metric: Metric name or list of metric names for multi-objective.
     """
-    if use_tree:
-        ss = cond_search_space_tree(
-            tree=search_space or _DEFAULT_SEARCH_TREE,
-            bias=search_bias,
-            constraints=constraints,
-            failures=failures,
-        )
-    else:
-        ss = cond_search_space(
-            base_space=search_space or _DEFAULT_SEARCH_SPACE,
-            bias=search_bias,
-            constraints=constraints,
-            failures=failures,
-        )
+    ss = cond_search_space(
+        base_space=search_space or _DEFAULT_SEARCH_SPACE,
+        bias=search_bias,
+        constraints=constraints,
+        failures=failures,
+    )
 
     if use_hpo_optimizer:
         return _run_hpo_optimizer(
@@ -655,7 +366,6 @@ def run_hpo(
             param_prefix=param_prefix,
             early_stop_threshold=early_stop_threshold,
             early_stop_min_reports=early_stop_min_reports,
-            use_tree=use_tree,
         )
 
     return _run_hpo_local(
@@ -671,7 +381,6 @@ def run_hpo(
         pruner=pruner,
         loss=loss,
         use_combined_score=use_combined_score,
-        use_tree=use_tree,
     )
 
 
@@ -691,13 +400,10 @@ def _run_hpo_local(
     pruner: str | None = "hyperband",
     loss: str | None = None,
     use_combined_score: bool = False,
-    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run HPO locally on this machine.
 
     Supports multi-objective: pass direction as a list, objective_metric as a list.
-    When ``use_tree=True``, the ``search_space`` is treated as a tree and
-    parameters are sampled via ``_suggest_params_tree()``.
     """
     optuna = _import_optuna()
 
@@ -735,9 +441,7 @@ def _run_hpo_local(
                 break
 
         trial = study.ask()
-        # In local mode, suggest_fn dispatches to flat or tree sampler
-        suggest_fn = _suggest_params_tree if use_tree else _suggest_params
-        params = suggest_fn(trial, search_space)
+        params = _suggest_params(trial, search_space)
         try:
             values = _run_trial_local_multi(script, params, metrics, loss=loss)
             if values is not None and all(v is not None for v in values):
@@ -779,7 +483,6 @@ def _run_hpo_distributed(
     param_prefix: str = "Args/",
     early_stop_threshold: float | None = None,
     early_stop_min_reports: int = 10,
-    use_tree: bool = False,
 ) -> dict[str, Any]:
     """Run HPO via clearml queue distribution (ask/tell mode).
 
@@ -835,8 +538,7 @@ def _run_hpo_distributed(
                 break
 
         trial = study.ask()
-        suggest_fn = _suggest_params_tree if use_tree else _suggest_params
-        params = suggest_fn(trial, search_space)
+        params = _suggest_params(trial, search_space)
 
         trial_task = Task.clone(
             source_task=source_task,
@@ -1939,3 +1641,357 @@ def train_curve_feedback(
             "suggest_increase": ["epochs"],
         },
     }
+
+
+# ── SearchGraph: NetworkX-based trial history tracking ──
+
+
+class SearchGraph:
+    """Directed graph tracking trial-to-trial parameter transitions.
+
+    Uses ``networkx.DiGraph`` where each node is a trial (identified by trial
+    number) and edges represent consecutive trial progression.  Node attributes
+    store the full parameter dict and objective value.
+
+    This is purely a **recording** / **visualisation** tool — it does not
+    influence sampling.  Use it to understand HPO dynamics after a run.
+
+    Example::
+
+        g = SearchGraph()
+        for trial in study.trials:
+            g.add_trial(trial.number, trial.params, trial.value, "maximize")
+        g.summary(top_k=3)
+        # -> {"node_count": 50, "edge_count": 49, "top_trials": [...]}
+    """
+
+    def __init__(self) -> None:
+        import networkx as nx
+
+        self._nx = nx
+        self.graph: nx.DiGraph = nx.DiGraph()
+        self.trials: list[dict[str, Any]] = []
+
+    def add_trial(
+        self,
+        trial_number: int,
+        params: dict[str, Any],
+        value: float | list[float] | None,
+        direction: str | list[str],
+    ) -> None:
+        """Record a completed trial.
+
+        Args:
+            trial_number: Integer trial identifier (typically ``trial.number``).
+            params: Sampled hyperparameters.
+            value: Objective value(s).  Single float or list for multi-objective.
+            direction: 'maximize', 'minimize', or a list for multi-objective.
+        """
+        norm_val: float
+        if isinstance(value, (int, float)):
+            norm_val = float(value)
+        elif isinstance(value, (list, tuple)):
+            # For multi-objective, take the first objective as primary
+            norm_val = float(value[0]) if value else 0.0
+        else:
+            norm_val = 0.0
+
+        self.graph.add_node(
+            trial_number,
+            params=params,
+            value=norm_val,
+            direction=direction,
+        )
+        self.trials.append({
+            "number": trial_number,
+            "params": params,
+            "value": norm_val,
+        })
+
+        # Create a transition edge from the previous trial (if any)
+        if len(self.trials) >= 2:
+            prev = self.trials[-2]["number"]
+            # Determine if value improved
+            if isinstance(direction, str) and direction == "maximize":
+                improved = norm_val > self.trials[-2]["value"]
+            else:
+                improved = norm_val < self.trials[-2]["value"]
+            self.graph.add_edge(prev, trial_number, improved=improved)
+
+    def summary(self, top_k: int = 5) -> dict[str, Any]:
+        """Return a structured summary of the search history.
+
+        Args:
+            top_k: Number of top trials to include.
+
+        Returns:
+            Dict with node_count, edge_count, param_transitions, top_trials.
+        """
+        if not self.trials:
+            return {"node_count": 0, "edge_count": 0, "top_trials": []}
+
+        is_best = (
+            (lambda v: v)
+            if isinstance(self.trials[0].get("direction"), str)
+            and self.trials[0]["direction"] == "maximize"
+            else (lambda v: v)
+        )
+        # Sort by value
+        sorted_trials = sorted(
+            self.trials, key=lambda t: t["value"], reverse=True
+        )
+
+        return {
+            "node_count": self.graph.number_of_nodes(),
+            "edge_count": self.graph.number_of_edges(),
+            "param_transitions": [
+                (u, v) for u, v in self.graph.edges()
+            ][:10],
+            "top_trials": sorted_trials[:top_k],
+        }
+
+    def to_json(self) -> dict[str, Any]:
+        """Export graph as a JSON-serializable dict for CLI / visualisation.
+
+        Returns::
+
+            {"nodes": [{"id": ..., "params": ..., "value": ...}],
+             "edges": [{"source": ..., "target": ..., "improved": ...}],
+             "top_trials": [...]}
+        """
+        nodes = [
+            {
+                "id": n,
+                "params": self.graph.nodes[n].get("params", {}),
+                "value": self.graph.nodes[n].get("value"),
+            }
+            for n in self.graph.nodes()
+        ]
+        edges = [
+            {
+                "source": u,
+                "target": v,
+                "improved": self.graph.edges[u, v].get("improved", False),
+            }
+            for u, v in self.graph.edges()
+        ]
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            **self.summary(top_k=5),
+        }
+
+
+# ── pymoo integration ──
+
+
+try:
+    import pymoo  # noqa: F401
+
+    _has_pymoo = True
+except ImportError:
+    _has_pymoo = False
+
+
+def run_hpo_pymoo(
+    eval_fn: Any,
+    search_space: dict[str, dict[str, Any]],
+    n_trials: int = 50,
+    pop_size: int = 20,
+    direction: str | list[str] = "maximize",
+    seed: int | None = None,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Run hyperparameter optimisation using pymoo's NSGA-II.
+
+    pymoo provides a rich family of evolutionary multi-objective algorithms.
+    This function wraps the ``pymoo.algorithms.moo.nsga2.NSGA2`` for both
+    single- and multi-objective problems.  Multi-objective results include
+    a Pareto-front approximation.
+
+    Args:
+        eval_fn: Callable ``f(params: dict[str, float]) -> float | list[float]``.
+                 Must accept a flat dict of hyperparameter names → values and
+                 return a scalar (single-objective) or list of scalars.
+        search_space: Standard expflow search space dict (same format as
+                      ``_DEFAULT_SEARCH_SPACE``).
+        n_trials: Total number of function evaluations (population × generations).
+        pop_size: NSGA-II population size per generation.
+        direction: 'maximize', 'minimize', or a list for multi-objective.
+        seed: Random seed for reproducibility.
+        verbose: If True, print progress.
+
+    Returns:
+        Dict with keys ``best_params``, ``best_value``, ``n_trials``,
+        ``direction``, and optionally ``pareto_front``.
+    """
+    if not _has_pymoo:
+        raise ImportError(
+            "pymoo is required for run_hpo_pymoo. Install with: pip install pymoo"
+        )
+
+    from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.core.problem import ElementwiseProblem
+    from pymoo.optimize import minimize
+    from pymoo.operators.sampling.rnd import FloatRandomSampling
+    from pymoo.operators.crossover.sbx import SBX
+    from pymoo.operators.mutation.pm import PM
+
+    import numpy as np  # noqa: N812
+
+    # Build variable bounds and types from search space
+    xl: list[float] = []
+    xu: list[float] = []
+    param_names: list[str] = []
+    param_log: list[bool] = []
+
+    for name, spec in search_space.items():
+        ptype = spec["type"]
+        if ptype not in ("float", "int"):
+            continue  # skip categorical for now
+        param_names.append(name)
+        xl.append(float(spec["low"]))
+        xu.append(float(spec["high"]))
+        param_log.append(spec.get("log", False))
+
+    n_var = len(param_names)
+
+    # Determine number of objectives
+    multi = isinstance(direction, list)
+    n_obj = len(direction) if multi else 1
+
+    # Build pymoo problem
+    class _HpoProblem(ElementwiseProblem):
+        def __init__(self) -> None:
+            super().__init__(
+                n_var=n_var,
+                n_obj=n_obj,
+                xl=np.array(xl),
+                xu=np.array(xu),
+            )
+
+        def _evaluate(self, x: Any, out: Any, *args: Any, **kwargs: Any) -> None:
+            # Convert to flat param dict, handling log scale
+            params: dict[str, float] = {}
+            for i, name in enumerate(param_names):
+                val = float(x[i])
+                if param_log[i]:
+                    # pymoo operates in linear space; convert from log
+                    val = np.exp(val)
+                params[name] = val
+
+            result = eval_fn(params)
+
+            if isinstance(result, (int, float)):
+                out["F"] = [float(result)]
+            else:
+                out["F"] = [float(v) for v in result]
+
+    # Normalise direction: pymoo always minimises → flip sign for maximise
+    # We do the flip inside by negating the objective
+    class _HpoProblemWithDirection(_HpoProblem):
+        def _evaluate(self, x: Any, out: Any, *args: Any, **kwargs: Any) -> None:
+            params = {}
+            for i, name in enumerate(param_names):
+                val = float(x[i])
+                if param_log[i]:
+                    val = np.exp(val)
+                params[name] = val
+
+            result = eval_fn(params)
+
+            if isinstance(result, (int, float)):
+                vals = [float(result)]
+            else:
+                vals = [float(v) for v in result]
+
+            # Flip sign for maximise objectives
+            if multi:
+                vals = [
+                    -v if d == "maximize" else v
+                    for v, d in zip(vals, direction)
+                ]
+            elif direction == "maximize":
+                vals = [-v for v in vals]
+
+            out["F"] = vals
+
+    n_generations = max(1, n_trials // pop_size)
+
+    algorithm = NSGA2(
+        pop_size=pop_size,
+        sampling=FloatRandomSampling(),
+        crossover=SBX(prob=0.9, eta=15),
+        mutation=PM(prob=0.1, eta=20),
+    )
+
+    if verbose:
+        display = None
+    else:
+        display = None
+
+    problem = _HpoProblemWithDirection()
+
+    res = minimize(
+        problem,
+        algorithm,
+        ("n_gen", n_generations),
+        seed=seed,
+        display=display,
+        verbose=verbose,
+    )
+
+    # Convert best solution back to param dict
+    best_params: dict[str, Any] = {}
+    x_flat = res.X.flatten() if hasattr(res.X, "flatten") else [res.X]
+    for i, name in enumerate(param_names):
+        val = float(x_flat[i]) if i < len(x_flat) else float(res.X[0])
+        if param_log[i]:
+            val = np.exp(val)
+        best_params[name] = val
+
+    # Undo the direction flip for the best value
+    best_f = res.F.flatten() if hasattr(res.F, "flatten") else [res.F]
+    best_value_raw = float(best_f[0])
+    if multi:
+        best_value = -best_value_raw if direction[0] == "maximize" else best_value_raw
+    elif direction == "maximize":
+        best_value = -best_value_raw
+    else:
+        best_value = best_value_raw
+
+    result_dict: dict[str, Any] = {
+        "best_params": best_params,
+        "best_value": best_value,
+        "n_trials": n_trials,
+        "completed": n_trials,
+        "failed": 0,
+        "direction": direction,
+        "method": "pymoo_nsga2",
+    }
+
+    if multi:
+        # Collect Pareto front
+        pareto_points = []
+        all_x = res.pop.get("X")
+        for i, x_i in enumerate(all_x):
+            f = res.pop.get("F")[i]
+            params_i = {}
+            x_flat_i = x_i.flatten() if hasattr(x_i, "flatten") else [x_i]
+            for j, name in enumerate(param_names):
+                val = float(x_flat_i[j]) if j < len(x_flat_i) else float(x_i[0])
+                if param_log[j]:
+                    val = np.exp(val)
+                params_i[name] = val
+            # Undo flip
+            f_values = [
+                -fv if direction[k] == "maximize" else fv
+                for k, fv in enumerate(f)
+            ]
+            pareto_points.append({
+                "params": params_i,
+                "values": [float(v) for v in f_values],
+            })
+        result_dict["pareto_front"] = pareto_points
+
+    return result_dict
