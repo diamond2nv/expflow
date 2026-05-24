@@ -1,6 +1,8 @@
 # Competition Logging — Beginner's Guide
 
-The `expflow competition` subcommands produce competition-compliant JSONL logs for the PDEBench competition. Three streams are merged into one `task1_logs.log`:
+The `expflow competition` subcommands produce competition-compliant JSONL logs
+for the PDEBench competition (Task 1 / Task 2 / Task 3). Three streams are
+merged into one `{problem_id}_logs.log`:
 
 ```
 fast.log    — Training metrics (epoch loss, validation scores)
@@ -11,22 +13,55 @@ llm-*.jsonl — LLM API requests captured by litellm proxy → ingest server
 ## Quick Start
 
 ```bash
-# 1. Set your API key (required for the proxy)
+# 0. (Optional) Audit and mask competition-specific content from wiki/skills
+expflow competition mask audit --wiki ~/wiki --skills ~/.hermes/skills
+expflow competition mask apply --wiki ~/wiki --skills ~/.hermes/skills
+
+# 1. (Optional) Bootstrap — verify clean environment + generate config
+expflow competition bootstrap
+
+# 2. Set your API key (required for the proxy)
 export DEEPSEEK_API_KEY="sk-..."
 # OR set in .env file:
 echo "DEEPSEEK_API_KEY=sk-..." >> .env
 
-# 2. Start a session (launches proxy + ingest server)
+# 3. Start a session (launches proxy + ingest server)
 expflow competition init --problem-id task1 --tag myrun
 
-# 3. Work as normal — all LLM calls are automatically logged
+# 4. Work as normal — all LLM calls are automatically logged
 hermes -p comp-task1-myrun
 
-# 4. Stop and merge
+# 5. Stop and merge
 expflow competition stop
 
-# 5. The merged log is at ~/.hermes/competition_logs/task1/myrun/task1_logs.log
+# 6. The merged log is at ~/.hermes/competition_logs/task1/myrun/task1_logs.log
 ```
+
+## Multi-Task Workflow
+
+Each task has its own train/eval scripts, data, and submission format.
+The competition subsystem is **task-agnostic** — just change `--problem-id`:
+
+```bash
+# Task 1 (Burgers nu=0.001)
+expflow competition init --problem-id task1 --tag burger-run
+# ... agent trains train_task1.py, evaluates eval_task1.py ...
+expflow competition stop
+
+# Task 2 (Multi-nu Burgers)
+expflow competition init --problem-id task2 --tag multi-nu-v2
+# ... agent trains train_task2.py, evaluates eval_task2.py ...
+expflow competition stop
+
+# Task 3 (Kuramoto-Sivashinsky)
+expflow competition init --problem-id task3 --tag ks-v1
+# ... agent trains train_task3.py, evaluates eval_task3.py ...
+expflow competition stop
+```
+
+After mask + bootstrap, the agent's knowledge base is **competition-clean**
+(no equation names, data paths, or scoring formulas), and the config.yaml
+tells the agent which task-specific parameters to use.
 
 ## Configuration — What Goes Where
 
@@ -40,6 +75,37 @@ expflow competition stop
 | max span | `config.yaml` → `competition.log.max_span_hours` | `12.0` | Max log time span in hours (0 = disabled) |
 | max elapsed | `config.yaml` → `competition.log.max_elapsed_seconds` | `60` | Per-entry elapsed_seconds cap |
 | problem id | CLI flag on `competition init` | `--problem-id task1` | Problem identifier from competition website |
+| per-task config | `config.yaml` → `competition.problems.{id}` | see below | Per-task overrides for log paths, caps |
+
+### Per-Problem Configuration
+
+Add per-task overrides under `competition.problems`:
+
+```yaml
+competition:
+  default_problem: task1
+  problems:
+    task1:
+      max_span_hours: 12
+      max_elapsed_seconds: 60
+      log_file: "task1_logs.log"
+      time_file: "task1_time.csv"
+      pred_file: "task1_pred.hdf5"
+    task2:
+      max_span_hours: 12
+      max_elapsed_seconds: 60
+      log_file: "task2_logs.log"
+      time_file: "task2_time.csv"
+      pred_file: "task2_pred.hdf5"
+    task3:
+      max_span_hours: 24
+      max_elapsed_seconds: 90
+      log_file: "task3_logs.log"
+      time_file: "task3_time.csv"
+      pred_file: "task3_pred.hdf5"
+```
+
+The `bootstrap` command auto-generates this template with the extracted problem.
 
 ### Sensitive values (.env only, never in config.yaml)
 
@@ -103,7 +169,7 @@ Hermes/OpenCode → litellm proxy (:4000) → DeepSeek API
                      merge
                        │
                        ▼
-               task1_logs.log
+               {problem_id}_logs.log
                        │
                        ▼
                 validate_log()

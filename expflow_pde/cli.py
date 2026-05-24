@@ -162,6 +162,22 @@ def _lazy_register_pipeline():
     return pipeline_app
 
 
+def _lazy_register_competition():
+    """Lazily import and register competition sub-command group."""
+    from expflow_pde.cli_competition import app as competition_app
+
+    for cmd in app.registered_commands:
+        if getattr(cmd, "name", None) == "competition":
+            return competition_app
+
+    app.add_typer(
+        competition_app,
+        name="competition",
+        help="Competition logging session management (init/stop/status/merge/validate)",
+    )
+    return competition_app
+
+
 def _lazy_register_repeat():
     """Lazily import and register repeat sub-command group."""
     from expflow_pde.cli_repeat import repeat_app
@@ -189,6 +205,7 @@ _ = _lazy_register_system()
 _ = _lazy_register_pin()
 _ = _lazy_register_analyze()
 _ = _lazy_register_pipeline()
+_ = _lazy_register_competition()
 _ = _lazy_register_repeat()
 
 

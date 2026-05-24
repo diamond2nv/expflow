@@ -4,6 +4,10 @@ Each rule defines regex patterns that match competition-specific content
 (PDE equations, data paths, scoring formats, etc.) and a replacement
 string. Used by scanner.py to audit or cleanse wiki/skills directories.
 
+Covers: Task 1 (Burgers nu=0.001), Task 2 (Multi-nu Burgers), Task 3 (K-S).
+PCMF / physics-informed residual / spectral filtering are NOT masked
+(they are cross-task general methods).
+
 Usage:
     from expflow_pde.competition.mask.rules import ALL_RULES
     for rule in ALL_RULES:
@@ -66,53 +70,114 @@ class MaskRule:
 EQUATION_RULES = MaskRule(
     name="pde_equation",
     patterns=[
+        # Named equations — all 3 tasks
         r"Burgers['\u2019]?\s*equation",
-        r"u_t\s*\+?\s*u\s*\*?\s*u_x\s*=",
         r"Kuramoto[\u2013\u2014-]Sivashinsky",
         r"K[S\u2013]?\s*equation",
         r"Navier[\u2013\u2014-]Stokes",
+        # PDE operator forms
+        r"u_t\s*\+?\s*u\s*\*?\s*u_x\s*=",
+        r"u_t[+\s].*?u_xxxx",
+        # nu values — task-specific
         r"nu\s*=\s*0\.001",
+        r"nu\s*[:=]\s*0\.0?0?1\b",
+        r"default_nu\s*=\s*0\.0?1?",
+        r"nu\s*=\s*[\d\.]+\s*(?:default|fallback)",
+        # Lambda2 conditioning (Task 3 specific)
+        r"lambda2\s*(?:predictor|encoder|clip)",
+        r"lambda2_pred",
+        r"lambda2\s*=\s*1\.25",
+        r"lambda2_val\s*=\s*1\.25",
+        # Equation-specific constants
+        r"TIME_STEPS\s*=\s*20",  # Task 3 uses 20 (vs Task 1/2's 10)
+        r"N_PREDICT\s*=\s*38",  # Task 3: 380 steps
+        r"TOTAL_STEPS\s*=\s*40",
+        # NuEncoder (Task 2 specific)
+        r"NuEncoder",
+        r"nu_encoder",
+        # Grid/channel patterns (Task 3)
+        r"grid_base",
+        r"in_channels\s*=\s*TIME_STEPS\s*\+\s*2",
     ],
     replacement="[PDE_EQUATION]",
     severity="high",
-    description="PDE equation names and formulas",
+    description="PDE equation names, formulas, and equation-specific parameters (nu, lambda2, grid)",
 )
 
 DATA_PATH_RULES = MaskRule(
     name="data_path",
     patterns=[
-        r"(?:data_new2|data_old)[/\w_/-]+",
+        # Common base paths
+        r"(?:data_new2|data_old|data_new3)[/\w_/-]+",
+        r"sample_submission[/\w]*",
+        r"train_val_test_init",
+        # Task 1 paths
         r"task1_test\.hdf5",
         r"task1_val\.hdf5",
         r"task1_pred\.hdf5",
         r"task1_time\.csv",
+        # Task 2 paths (.h5 suffix!)
+        r"task2_test\.h5",
+        r"task2_val\.h5",
         r"task2_pred\.hdf5",
-        r"sample_submission[/\w]*",
-        r"train_val_test_init",
+        r"task2_time\.csv",
+        r"task2_train_part\d",
+        # Task 3 paths (.hdf5 suffix)
+        r"task3_test\.hdf5",
+        r"task3_val\.hdf5",
+        r"task3_pred_.*\.hdf5",
+        r"task3_time\.csv",
+        r"TASK3_TRAIN",
+        r"TASK3_VAL",
+        r"TASK3_TEST",
+        r"x-coordinate",
+        # Generic wildcard for any task*_ path
+        r"task\d+_[a-z]+_part\d",
     ],
     replacement="[COMPETITION_DATA_PATH]",
     severity="high",
-    description="Competition dataset file paths",
+    description="Competition dataset file paths and HDF5 keys",
 )
 
 SCORING_RULES = MaskRule(
     name="scoring_format",
     patterns=[
-        r"Seg1=\d+[\.\d]*",
+        # Segmented scoring
+        r"Seg[1-3]\s*[(].*?[)]\s*=\s*\d+[\.\d]*",
         r"Seg\s*Total[\s:=]+\d+[\.\d]*",
         r"\bseg_total\b",
+        # Log file names — all 3 tasks
         r"task1_logs\.log",
+        r"task2_logs\.log",
+        r"task3_logs\.log",
+        # Competition scoring module
+        r"compute_task3_segmented_scores",
+        r"compute_segmented_scores",
+        r"compute_competition_score",
+        # Score caps
+        r"ReL[-\s]*MSE",
+        r"Lorentzian",
+        r"Frechet",
+        r"frechet_distance",
+        # Threshold values
+        r"\bweight\s*25%\b",
+        r"\bweight\s*50%\b",
     ],
     replacement="[SCORE_METRIC_OR_FILE]",
     severity="medium",
-    description="Scoring output format and log file names",
+    description="Scoring output format, log file names, and seg thresholds",
 )
 
 SUBMISSION_RULES = MaskRule(
     name="submission_format",
     patterns=[
+        # CSV headers
         r"train_time,inference_time",
         r"segmented_score",
+        # Output conventions
+        r"train_time\s*=\s*\d+\.\d+",
+        r"inference_time\s*=\s*\d+\.\d+",
+        r"infer_time\s*=\s*\d+\.\d+",
     ],
     replacement="[COMPETITION_FORMAT]",
     severity="medium",
@@ -122,15 +187,37 @@ SUBMISSION_RULES = MaskRule(
 TRAIN_PARAM_RULES = MaskRule(
     name="train_param",
     patterns=[
+        # Task-specific training configs
+        r"TIME_STEPS\s*=\s*10",       # Task 1/2
+        r"TIME_STEPS\s*=\s*20",       # Task 3
+        r"INITIAL_STEP\s*=\s*TIME_STEPS",
+        r"N_PREDICT\s*=\s*380",
+        r"TOTAL_STEPS\s*=\s*400",
+        # Competition default hparams
         r"sub_step\s*[:=]\s*\d+",
         r"num_sub_steps\s*[:=]\s*\d+",
         r"n_train\s*[:=]\s*500\b",
         r"batch_size\s*[:=]\s*16\b",
-        r"\bn_modes\s*[:=]\s*(?:16|24|32)\b",
+        r"\bn_modes\s*[:=]\s*(?:12|16|24|32|64)\b",
+        r"hidden_channels\s*[:=]\s*(?:20|32|64|128)\b",
+        r"n_layers\s*[:=]\s*4\b",
+        r"n_windows\s*[:=]\s*30000\b",
+        # Training loop
+        r"eval_every\s*[:=]\s*10\b",
+        r"eval_every\s*[:=]\s*50\b",
+        r"M\s*[:=]\s*10\b",  # Task 3 multi-step
+        r"tag\s*[:=]\s*['\"]task[123]",  # tag = 'task1_v1'
+        r"default_nu\s*[:=]\s*0\.01",
+        # Task tags
+        r"['\"]task\d+'",
+        r"['\"]task\d+_\w+['\"]",
+        # ClearML task naming
+        r"project_name=['\"]PDEBench['\"]",
+        r"task\d+v\d",
     ],
     replacement="[TRAIN_HYPERPARAMETER]",
     severity="medium",
-    description="Competition-optimized training parameters",
+    description="Competition-optimized training parameters and task tags",
 )
 
 STRATEGY_RULES = MaskRule(
