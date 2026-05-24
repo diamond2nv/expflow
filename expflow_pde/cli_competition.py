@@ -234,21 +234,73 @@ def merge_command(
 
 @app.command("validate")
 def validate_command(
-    path: Path = typer.Argument(
-        ..., help="Path to task1_logs.log"
+    path: Optional[Path] = typer.Argument(
+        None, help="Path to problem_logs.log, or submission dir for full check"
+    ),
+    submission_dir: Optional[Path] = typer.Option(
+        None, "--submission", "-s",
+        help="Submission directory (runs full check: log + code-log match)"
+    ),
+    problem_id: str = typer.Option(
+        "task1", "--problem-id", "-p",
+        help="Problem identifier (used for file naming)"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="JSON output"
     ),
 ) -> None:
-    """Validate an existing competition log file."""
-    from expflow_pde.competition.merge import validate_log
+    """Validate a competition log file or full submission directory.
 
-    errors = validate_log(path)
-    if errors:
-        typer.echo(f"Validation FAILED: {len(errors)} errors")
-        for e in errors[:20]:
-            typer.echo(f"  - {e}")
-        raise typer.Exit(1)
+    Two modes:
+      1. Single log file: check format, monotonicity, span
+      2. Submission directory (--submission): full check including
+         required files (pred.hdf5, time.csv) and code-log traceability
+
+    Examples:
+        # Validate a single log file
+        expflow competition validate task1_logs.log
+
+        # Validate a full submission directory
+        expflow competition validate --submission ./submission --problem-id task1
+    """
+    if submission_dir:
+        # Full submission check
+        from expflow_pde.competition.validate import validate_submission
+
+        result = validate_submission(
+            submission_dir=submission_dir,
+            problem_id=problem_id,
+            verbose=True,
+        )
+
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            typer.echo("=== Submission Validation ===")
+            for check in result.get("checks", []):
+                status = "PASS" if check["passed"] else "FAIL"
+                typer.echo(f"  [{status}] {check['label']}: {check['detail']}")
+                for err in check.get("errors", []):
+                    typer.echo(f"      - {err}")
+            typer.echo(f"\n  Overall: {'PASS' if result['all_pass'] else 'FAIL'}")
+
     else:
-        typer.echo("Validation PASSED")
+        # Single log file check
+        from expflow_pde.competition.merge import validate_log
+
+        if path is None:
+            typer.echo("Provide a log file path or use --submission for full check.")
+            raise typer.Exit(1)
+
+        errors = validate_log(path)
+        if errors:
+            typer.echo(f"Validation FAILED: {len(errors)} errors")
+            for e in errors[:20]:
+                typer.echo(f"  - {e}")
+            raise typer.Exit(1)
+        else:
+            typer.echo("Validation PASSED")
 
 
 # ── Mask sub-command ─────────────────────────────────────
@@ -398,6 +450,60 @@ def bootstrap_cmd(
         typer.echo(f"  Config generated: {result.get('config_path', 'N/A')}")
         if result.get("extracted_params"):
             typer.echo(f"  Extracted params: {result['extracted_params']}")
+
+
+# ── Collect sub-command ─────────────────────────────────────
+
+
+@app.command("collect")
+def collect_cmd(
+    pipeline_id: str = typer.Argument(
+        ..., help="clearml pipeline controller task ID"
+    ),
+    output_dir: str = typer.Option(
+        "~/.competition/artifacts", "--output-dir", "-o",
+        help="Output directory for downloaded artifacts"
+    ),
+    step: Optional[list[str]] = typer.Option(
+        None, "--step", help="Only collect from specific step names (can repeat)"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="JSON output"
+    ),
+) -> None:
+    """Download artifacts from a completed clearml pipeline.
+
+    After a training+eval pipeline completes on a remote clearml agent,
+    the eval step should have uploaded result files (pred.hdf5, time.csv)
+    as clearml artifacts. This command downloads them to the local machine.
+
+    Example:
+        expflow competition collect PIPELINE_ID --step eval --output-dir ./submission
+    """
+    from expflow_pde.competition.collect import collect_pipeline_artifacts
+
+    manifest = collect_pipeline_artifacts(
+        pipeline_id=pipeline_id,
+        output_dir=output_dir,
+        step_names=step,
+    )
+
+    if json_output:
+        import json
+        typer.echo(json.dumps(manifest, indent=2, default=str, ensure_ascii=False))
+    else:
+        typer.echo(f"=== Artifact Collection: {pipeline_id} ===")
+        if "error" in manifest:
+            typer.echo(f"  ERROR: {manifest['error']}")
+            raise typer.Exit(1)
+        typer.echo(f"  Total artifacts: {manifest['total_artifacts']}")
+        for step in manifest.get("steps", []):
+            typer.echo(f"  Step: {step['step_name']} ({step['task_id'][:12]}...)")
+            for art in step.get("artifacts", []):
+                if "error" in art:
+                    typer.echo(f"    ❌ {art['name']}: {art['error']}")
+                else:
+                    typer.echo(f"    ✅ {art['name']} -> {art['local_path']}")
 
 
 if __name__ == "__main__":
