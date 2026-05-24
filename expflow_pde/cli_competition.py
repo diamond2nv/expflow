@@ -245,6 +245,18 @@ def validate_command(
         "task1", "--problem-id", "-p",
         help="Problem identifier (used for file naming)"
     ),
+    score: bool = typer.Option(
+        False, "--score",
+        help="Score predictions against ground truth (requires --gt and --score-config)"
+    ),
+    gt: Optional[Path] = typer.Option(
+        None, "--gt",
+        help="Ground truth HDF5 path for scoring"
+    ),
+    score_config: Optional[Path] = typer.Option(
+        None, "--score-config",
+        help="Scoring config JSON (agent fills this from rules document during bootstrap)"
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="JSON output"
     ),
@@ -262,7 +274,65 @@ def validate_command(
 
         # Validate a full submission directory
         expflow competition validate --submission ./submission --problem-id task1
+
+        # Score submission against ground truth
+        expflow competition validate --score --gt task1_val.hdf5 \\
+            --score-config task1_scoring.json --submission ./submission
     """
+    if score:
+        # Score mode
+        from expflow_pde.competition.scoring import (
+            ProblemConfig, load_config_from_json, score_submission,
+        )
+
+        if not submission_dir:
+            typer.echo("--score requires --submission <dir>")
+            raise typer.Exit(1)
+        if not gt:
+            typer.echo("--score requires --gt <path>")
+            raise typer.Exit(1)
+
+        # Load scoring config (agent must have created this during bootstrap)
+        if score_config and score_config.exists():
+            cfg = load_config_from_json(score_config)
+        else:
+            typer.echo(
+                f"Scoring config not found: {score_config}\n"
+                f"Agent must create scoring config from competition rules during bootstrap.\n"
+                f"See: expflow_pde.competition.scoring.ProblemConfig"
+            )
+            raise typer.Exit(1)
+
+        pred_file = submission_dir / f"{problem_id}_pred.hdf5"
+        if not pred_file.exists():
+            typer.echo(f"Prediction file not found: {pred_file}")
+            raise typer.Exit(1)
+
+        result = score_submission(pred_file, gt, cfg)
+
+        if "error" in result:
+            typer.echo(f"Scoring error: {result['error']}")
+            raise typer.Exit(1)
+
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            typer.echo(f"=== Scoring: {problem_id} ===")
+            for seg in cfg.segments:
+                label = seg.label
+                score_val = result.get(f"{label}_score", 0)
+                rel = result.get(f"{label}_rel_mse", None)
+                if rel is not None:
+                    typer.echo(f"  {label}: {score_val:.4f}  (Rel-MSE={rel:.6f})")
+                else:
+                    ltz = result.get(f"{label}_lorentzian", 0)
+                    fd = result.get(f"{label}_frechet", 0)
+                    typer.echo(f"  {label}: {score_val:.4f}  (Lorentzian={ltz:.4f}, Frechet={fd:.4f})")
+            typer.echo(f"  ---")
+            typer.echo(f"  Total Segmented Score: {result['total_segmented_score']:.4f}")
+        return
+
     if submission_dir:
         # Full submission check
         from expflow_pde.competition.validate import validate_submission
