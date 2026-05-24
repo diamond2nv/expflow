@@ -65,25 +65,41 @@ class CompetitionSession:
         self,
         task: str = "task1",
         tag: str = "",
-        proxy_port: int = DEFAULT_PROXY_PORT,
-        ingest_port: int = DEFAULT_INGEST_PORT,
+        proxy_port: int | None = None,
+        ingest_port: int | None = None,
         target_url: str = "",
         log_dir: str | None = None,
     ) -> None:
         """Initialize a competition session.
 
+        Port defaults: proxy_port=4000, ingest_port=8099.
+        Can be overridden via config.yaml → competition.proxy_port / ingest_port.
+
         Args:
             task: Task identifier ('task1' or 'task2').
             tag: Human-readable experiment tag.
-            proxy_port: Port for litellm proxy.
-            ingest_port: Port for JSONL ingest server.
+            proxy_port: Port for litellm proxy (default: from config, else 4000).
+            ingest_port: Port for JSONL ingest server (default: from config, else 8099).
             target_url: Upstream API base URL (default: DEEPSEEK_BASE_URL env).
-            log_dir: Override default log directory.
+            log_dir: Override default log directory (default: from config, else
+                     ~/.hermes/competition_logs/).
         """
+        # Resolve defaults: explicit arg > config.yaml > hardcoded default
+        _cfg_proxy = None
+        _cfg_ingest = None
+        _cfg_log_dir = None
+        try:
+            from expflow_pde.config import get as cfg_get
+            _cfg_proxy = cfg_get("competition.proxy_port")
+            _cfg_ingest = cfg_get("competition.ingest_port")
+            _cfg_log_dir = cfg_get("competition.log_dir")
+        except Exception:
+            pass
+
         self.task = task
         self.tag = tag
-        self.proxy_port = proxy_port
-        self.ingest_port = ingest_port
+        self.proxy_port = proxy_port or _cfg_proxy or DEFAULT_PROXY_PORT
+        self.ingest_port = ingest_port or _cfg_ingest or DEFAULT_INGEST_PORT
         self.session_id = f"{SESSION_PREFIX}-{task}-{int(time.time())}"
         self.target_url = target_url or os.environ.get(
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
@@ -93,8 +109,16 @@ class CompetitionSession:
         )
         self.master_key = f"sk-comp-{task}-{int(time.time())}"
 
-        self._log_dir = Path(log_dir) if log_dir else _LOG_DIR
-        self._log_dir = self._log_dir / f"{task}_{tag}" if tag else self._log_dir / task
+        # Log dir: explicit arg > config.yaml > env var > default
+        if log_dir:
+            resolved_log_dir = Path(log_dir)
+        elif _cfg_log_dir:
+            resolved_log_dir = Path(str(_cfg_log_dir))
+        elif os.environ.get("COMPETITION_LOG_DIR"):
+            resolved_log_dir = Path(os.environ["COMPETITION_LOG_DIR"])
+        else:
+            resolved_log_dir = _LOG_DIR
+        self._log_dir = resolved_log_dir / f"{task}_{tag}" if tag else resolved_log_dir / task
         self._log_dir.mkdir(parents=True, exist_ok=True)
 
         self._comp_log = get_logger(
