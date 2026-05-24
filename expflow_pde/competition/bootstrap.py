@@ -70,6 +70,7 @@ def bootstrap_session(
 
     # Step 4: Generate config
     config_path = Path(output_config_path).expanduser()
+    comp_dir = config_path.parent
     if total_violations > 0:
         # Don't generate config if environment isn't clean
         config_generated = False
@@ -78,6 +79,15 @@ def bootstrap_session(
         _generate_config(config_path, extracted_params)
         config_generated = True
         actual_config_path = str(config_path)
+
+        # Step 4b: Generate scoring config template (to be filled by agent from rules)
+        from .scoring import ProblemConfig
+
+        pid = extracted_params.get("problem_id", "task1")
+        scoring_cfg_path = comp_dir / f"scoring_{pid}.json"
+        # Create an empty template — agent fills from rules document
+        empty_cfg = ProblemConfig(problem_id=pid)
+        _generate_scoring_template(scoring_cfg_path, empty_cfg)
 
     return {
         "clean": total_violations == 0,
@@ -161,3 +171,28 @@ def _generate_config(config_path: Path, params: dict[str, Any]) -> None:
     ]
 
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _generate_scoring_template(json_path: Path, cfg: "ProblemConfig") -> None:
+    """Generate a scoring config JSON template (agent fills from rules document).
+
+    The agent reads the competition rules document during bootstrap, extracts
+    segment parameters, and fills them into this JSON. Then uses:
+        expflow competition validate --score --score-config <this.json> ...
+    """
+    import json
+    from pathlib import Path as _Path
+
+    from .scoring import problem_config_to_dict
+
+    path = _Path(json_path) if isinstance(json_path, str) else json_path
+    data = problem_config_to_dict(cfg)
+    data["_instructions"] = (
+        "Fill the 'segments' array from the competition rules document. "
+        "For each segment, set: label, start_step, end_step, weight, formula "
+        "('exp_relmse' or 'max_lorentzian_frechet'), and coeff. "
+        "Then run: expflow competition validate --score "
+        "--gt <val_file.hdf5> --score-config this.json --submission <dir>"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")

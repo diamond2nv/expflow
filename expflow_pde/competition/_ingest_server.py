@@ -10,7 +10,7 @@ Runs as a subprocess managed by CompetitionSession. No external
 dependencies beyond FastAPI + uvicorn + stdlib.
 
 Architecture:
-    litellm proxy (port 4000) --generic_api--> ingest server (port 8099)
+    litellm proxy (configurable port) --generic_api--> ingest server (configurable port)
                                                    |
                                                    v
                                           llm-YYYYMMDD.jsonl

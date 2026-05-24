@@ -9,7 +9,7 @@ Usage:
 
     manifest = collect_pipeline_artifacts(
         pipeline_id="pipe_abc123",
-        output_dir="~/.competition/artifacts/task1",
+        output_dir="~/.competition/artifacts",
     )
 """
 

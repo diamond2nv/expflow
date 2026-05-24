@@ -199,7 +199,7 @@ def validate_log_format(
 
 def validate_submission(
     submission_dir: str | Path,
-    problem_id: str = "task1",
+    problem_id: str = "task1",  # Task name for file naming (task1/task2/task3)
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Run full submission validation: log format + code-log match.

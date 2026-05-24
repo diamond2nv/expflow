@@ -34,7 +34,7 @@ hermes -p comp-task1-myrun
 # 5. Stop and merge
 expflow competition stop
 
-# 6. The merged log is at ~/.hermes/competition_logs/task1/myrun/task1_logs.log
+# 6. The merged log is at ~/.hermes/competition_logs/{problem_id}/{tag}/{problem_id}_logs.log
 ```
 
 ## Multi-Task Workflow

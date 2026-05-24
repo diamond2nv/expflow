@@ -253,17 +253,20 @@ def merge_logs(
     agent_log: Path,
     llm_files: list[Path],
     output: Path,
-    task: str = "task1",
+    task: str = "",  # Deprecated: use output path to infer task name
     session_start_ts: str | None = None,
 ) -> int:
     """Merge all log sources into a competition-compliant JSONL file.
+
+    The output file is named like '{problem_id}_logs.log' — use that,
+    not the task parameter. The task parameter is kept for backward compat.
 
     Args:
         fast_log: Path to fast.log (training metrics).
         agent_log: Path to agent.log (agent reasoning).
         llm_files: List of paths to llm-*.jsonl (litellm callback output).
-        output: Output path for task1_logs.log.
-        task: Task identifier.
+        output: Output path for the merged log (e.g. task1_logs.log).
+        task: Task identifier (deprecated — output path is authoritative).
         session_start_ts: ISO timestamp of session start (for computing
             first-entry elapsed_seconds from real gap instead of hardcoded 3.0).
 
@@ -346,13 +349,13 @@ def validate_log(path: Path, max_span_hours: float | None = None) -> list[str]:
       1. Every line is valid JSON.
       2. Every line has 'timestamp' and 'elapsed_seconds'.
       3. Timestamps are monotonically increasing.
-      4. Total span does not exceed max_span_hours (12h default).
+      4. Total span does not exceed max_span_hours (config or 12h default).
       5. Warns if entry count is suspiciously low (< 10 entries).
       6. Reports gaps > 10 minutes between consecutive entries (not an error, but warns).
 
     Args:
-        path: Path to the task1_logs.log file.
-        max_span_hours: Maximum allowed time span (default 12).
+        path: Path to the {problem_id}_logs.log file.
+        max_span_hours: Maximum allowed time span (config or 12h default).
 
     Returns:
         List of error strings (empty = passed).

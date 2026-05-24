@@ -57,7 +57,7 @@ class CompetitionSession:
         # ... agent work (training + LLM calls via litellm proxy) ...
         session.stop()
 
-    After stop(), the merged task1_logs.log is written to
+    After stop(), the merged {task}_logs.log is written to
     ~/.hermes/competition_logs/{task}_{tag}/.
     """
 
@@ -76,7 +76,7 @@ class CompetitionSession:
         Can be overridden via config.yaml → competition.proxy_port / ingest_port.
 
         Args:
-            task: Task identifier ('task1' or 'task2').
+            task: Task identifier (e.g. 'task1', 'task2', 'task3').
             tag: Human-readable experiment tag.
             proxy_port: Port for litellm proxy (default: from config, else 4000).
             ingest_port: Port for JSONL ingest server (default: from config, else 8099).
@@ -684,7 +684,7 @@ class CompetitionSession:
             return -1
 
     def _merge_and_validate(self) -> dict:
-        """Merge fast.log + agent.log + llm-*.jsonl -> task1_logs.log and validate."""
+        """Merge fast.log + agent.log + llm-*.jsonl -> {task}_logs.log and validate."""
         from .merge import merge_logs, validate_log
 
         output_path = self._log_dir / f"{self.task}_logs.log"
