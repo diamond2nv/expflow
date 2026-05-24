@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """expflow competition logging system.
 
 Three-stream architecture:
@@ -20,6 +18,16 @@ Usage:
     session.start()   # launch litellm proxy
     # ... agent work ...
     session.stop()    # merge logs + validate
+
+Mask (competition cleansing):
+    from expflow_pde.competition.mask import ALL_RULES, scan_directory, apply_mask
+
+    violations = scan_directory(Path("~/wiki"), ALL_RULES)
+    manifest = apply_mask(Path("~/wiki"), Path("~/.competition/wiki"), ALL_RULES)
+
+Bootstrap:
+    from expflow_pde.competition.bootstrap import bootstrap_session
+    result = bootstrap_session()
 """
 
 from __future__ import annotations

@@ -27,7 +27,14 @@ app = typer.Typer(
 
 @app.command("init")
 def init_session(
-    task: str = typer.Option("task1", help="Task identifier (task1/task2)"),
+    problem_id: str = typer.Option(
+        "", "--problem-id", "-p",
+        help="Problem identifier from competition website (e.g. 'task1')"
+    ),
+    task: str = typer.Option(
+        "", "--task",
+        help="Deprecated alias for --problem-id (use --problem-id instead)"
+    ),
     tag: str = typer.Option("", help="Experiment tag for log subdirectory"),
     proxy_port: int = typer.Option(
         4000, help="Litellm proxy listen port"
@@ -55,8 +62,10 @@ def init_session(
     """
     from expflow_pde.competition import CompetitionSession
 
+    resolved_problem = problem_id or task or "task1"
+
     session = CompetitionSession(
-        task=task,
+        task=resolved_problem,
         tag=tag,
         proxy_port=proxy_port,
         ingest_port=ingest_port,
@@ -240,6 +249,155 @@ def validate_command(
         raise typer.Exit(1)
     else:
         typer.echo("Validation PASSED")
+
+
+# ── Mask sub-command ─────────────────────────────────────
+
+
+@app.command("mask")
+def mask_cmd(
+    action: str = typer.Argument(
+        ..., help="Action: audit (scan only) | apply (create cleansed copy)"
+    ),
+    wiki_dir: str = typer.Option(
+        "~/wiki", "--wiki-dir", help="Wiki directory to scan"
+    ),
+    skills_dir: str = typer.Option(
+        "~/.hermes/skills", "--skills-dir", help="Skills directory to scan"
+    ),
+    output_dir: str = typer.Option(
+        "~/.competition", "--output-dir", help="Output dir for --apply"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="JSON output for programmatic consumption"
+    ),
+) -> None:
+    """Scan or cleanse wiki/skills for competition-specific content.
+
+    Competition rules forbid pre-existing problem-specific code, data paths,
+    and equation formulas in the agent's knowledge base. Use this command to
+    audit (default) or create a cleansed working copy (--apply).
+
+    Rules mask: PDE equation names, data file paths, scoring formats,
+    submission file names, competition-proven hyperparameters, and
+    competition strategy references.
+    """
+    from pathlib import Path
+
+    from expflow_pde.competition.mask.rules import ALL_RULES
+    from expflow_pde.competition.mask.scanner import apply_mask, scan_directory
+
+    wiki_path = Path(wiki_dir).expanduser()
+    skills_path = Path(skills_dir).expanduser()
+
+    if action == "audit":
+        wiki_results = scan_directory(wiki_path, ALL_RULES)
+        skills_results = scan_directory(skills_path, ALL_RULES)
+        total = len(wiki_results) + len(skills_results)
+        total_violations = sum(
+            r["violation_count"] for r in wiki_results + skills_results
+        )
+
+        if json_output:
+            import json
+            typer.echo(json.dumps({
+                "wiki_files_with_violations": len(wiki_results),
+                "skills_files_with_violations": len(skills_results),
+                "total_violations": total_violations,
+                "wiki_violations": wiki_results,
+                "skills_violations": skills_results,
+            }, indent=2, ensure_ascii=False))
+        else:
+            typer.echo(f"=== Mask Audit: {total_violations} violations in {total} files ===")
+            for label, results in [("wiki", wiki_results), ("skills", skills_results)]:
+                for r in results:
+                    if r.get("violations"):
+                        typer.echo(f"  [{label}] {r['path']}: {r['violation_count']} violation(s)")
+                        for v in r["violations"][:5]:
+                            typer.echo(f"    - {v}")
+
+    elif action == "apply":
+        out_path = Path(output_dir).expanduser()
+        wiki_out = out_path / "wiki"
+        skills_out = out_path / "skills"
+
+        wiki_manifest = apply_mask(wiki_path, wiki_out, ALL_RULES)
+        skills_manifest = apply_mask(skills_path, skills_out, ALL_RULES)
+
+        if json_output:
+            import json
+            typer.echo(json.dumps({
+                "wiki": wiki_manifest,
+                "skills": skills_manifest,
+            }, indent=2, ensure_ascii=False))
+        else:
+            typer.echo(
+                f"Mask applied: wiki ({wiki_manifest['files_masked']} files masked), "
+                f"skills ({skills_manifest['files_masked']} files masked)"
+            )
+            typer.echo(f"Output: {out_path}/")
+    else:
+        typer.echo(f"Unknown action: {action}. Use 'audit' or 'apply'.")
+        raise typer.Exit(1)
+
+
+# ── Bootstrap sub-command ─────────────────────────────────────
+
+
+@app.command("bootstrap")
+def bootstrap_cmd(
+    rules_doc: Optional[str] = typer.Option(
+        None, "--rules-doc", "-r",
+        help="Path to competition rules document (PDF or markdown)"
+    ),
+    wiki_dir: str = typer.Option(
+        "~/wiki", "--wiki-dir", help="Wiki directory to audit"
+    ),
+    skills_dir: str = typer.Option(
+        "~/.hermes/skills", "--skills-dir", help="Skills directory to audit"
+    ),
+    output_config: str = typer.Option(
+        "~/.competition/config.yaml", "--output-config",
+        help="Output path for generated config"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="JSON output"
+    ),
+) -> None:
+    """Self-guided competition setup — verify environment and generate config.
+
+    Checks:
+    1. Run mask audit on wiki/ and skills/ for competition-specific content
+    2. Extract competition parameters from rules document (if provided)
+    3. Generate competition config.yaml with discovered parameters
+    4. Report clean/dirty status
+
+    After a clean bootstrap, run:
+      expflow competition mask apply
+    to create a cleansed working copy.
+    """
+    from expflow_pde.competition.bootstrap import bootstrap_session
+
+    result = bootstrap_session(
+        rules_doc_path=rules_doc,
+        wiki_dir=wiki_dir,
+        skills_dir=skills_dir,
+        output_config_path=output_config,
+    )
+
+    if json_output:
+        import json
+        typer.echo(json.dumps(result, indent=2, default=str, ensure_ascii=False))
+    else:
+        typer.echo("=== Competition Bootstrap Report ===")
+        typer.echo(f"  Environment clean: {'YES' if result.get('clean') else 'VIOLATIONS FOUND'}")
+        if result.get("violation_count"):
+            typer.echo(f"  Violations: {result['violation_count']} "
+                       f"(wiki: {result.get('wiki_issues', 0)}, "
+                       f"skills: {result.get('skills_issues', 0)})")
+        typer.echo(f"  Config generated: {result.get('config_path', 'N/A')}")
+        if result.get("extracted_params"):
+            typer.echo(f"  Extracted params: {result['extracted_params']}")
 
 
 if __name__ == "__main__":

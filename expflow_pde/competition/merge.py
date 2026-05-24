@@ -25,10 +25,35 @@ _LOG_LINE_RE = re.compile(
     r'\[.*?\]\s*-\s*\[(.*?):(.*?)\]\s*-\s*\[PID:(\d+)\]\s*-\s*(.*)'
 )
 
-# 12-hour span limit per competition rules
-MAX_SPAN_HOURS = 12.0
-# Max elapsed_seconds cap (per-entry LLM call)
-MAX_ELAPSED = 60.0
+# Default limits — override via config.yaml:
+#   competition.log.max_span_hours: 12.0   (0 = disabled)
+#   competition.log.max_elapsed_seconds: 60.0
+_MAX_SPAN_HOURS_DEFAULT = 12.0
+_MAX_ELAPSED_DEFAULT = 60.0
+
+
+def _resolve_max_elapsed() -> float:
+    """Read max_elapsed_seconds from config.yaml, fallback to default."""
+    try:
+        from expflow_pde.config import get as cfg_get
+        val = cfg_get("competition.log.max_elapsed_seconds")
+        if val is not None and float(val) > 0:
+            return float(val)
+    except Exception:
+        pass
+    return _MAX_ELAPSED_DEFAULT
+
+
+def _resolve_max_span_hours() -> float:
+    """Read max_span_hours from config.yaml, fallback to default."""
+    try:
+        from expflow_pde.config import get as cfg_get
+        val = cfg_get("competition.log.max_span_hours")
+        if val is not None and float(val) > 0:
+            return float(val)
+    except Exception:
+        pass
+    return _MAX_SPAN_HOURS_DEFAULT
 
 
 def _ts(ts_str: str) -> str:
@@ -54,7 +79,7 @@ def _elapsed(entries: list[dict], idx: int, session_start_ts: str | None = None)
                 gap = (t1 - t0).total_seconds()
                 if gap < 0:
                     gap = 3.0  # fallback on clock skew
-                return min(round(gap, 3), MAX_ELAPSED)
+                return min(round(gap, 3), _resolve_max_elapsed())
             except (KeyError, ValueError, TypeError):
                 pass
         return 3.0
@@ -62,7 +87,7 @@ def _elapsed(entries: list[dict], idx: int, session_start_ts: str | None = None)
         t0 = datetime.fromisoformat(entries[idx - 1]["timestamp"])
         t1 = datetime.fromisoformat(entries[idx]["timestamp"])
         gap = (t1 - t0).total_seconds()
-        return min(round(gap, 3), MAX_ELAPSED)
+        return min(round(gap, 3), _resolve_max_elapsed())
     except (KeyError, ValueError):
         return 3.0
 
@@ -314,7 +339,7 @@ def merge_logs(
     return len(comp)
 
 
-def validate_log(path: Path, max_span_hours: float = MAX_SPAN_HOURS) -> list[str]:
+def validate_log(path: Path, max_span_hours: float | None = None) -> list[str]:
     """Validate a competition log file.
 
     Checks:
@@ -337,6 +362,10 @@ def validate_log(path: Path, max_span_hours: float = MAX_SPAN_HOURS) -> list[str
 
     if not path.exists():
         return [f"Log file not found: {path}"]
+
+    # Resolve max_span_hours from config if not passed explicitly
+    if max_span_hours is None:
+        max_span_hours = _resolve_max_span_hours()
 
     lines: list[str] = []
     with open(path, encoding="utf-8") as f:

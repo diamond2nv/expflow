@@ -17,7 +17,7 @@ export DEEPSEEK_API_KEY="sk-..."
 echo "DEEPSEEK_API_KEY=sk-..." >> .env
 
 # 2. Start a session (launches proxy + ingest server)
-expflow competition init --task task1 --tag myrun
+expflow competition init --problem-id task1 --tag myrun
 
 # 3. Work as normal — all LLM calls are automatically logged
 hermes -p comp-task1-myrun
@@ -37,7 +37,9 @@ expflow competition stop
 | `COMPETITION_LOG_DIR` | `.env` or env var | `~/competition_logs` | Override log directory (default: `~/.hermes/competition_logs/`). |
 | proxy port | `config.yaml` → `competition.proxy_port` | `4000` | litellm proxy listen port (default: `4000`). |
 | ingest port | `config.yaml` → `competition.ingest_port` | `8099` | JSONL ingest server port (default: `8099`). |
-| task, tag | CLI flags on `competition init` | `--task task1 --tag v1` | Identifying labels for the session. |
+| max span | `config.yaml` → `competition.log.max_span_hours` | `12.0` | Max log time span in hours (0 = disabled) |
+| max elapsed | `config.yaml` → `competition.log.max_elapsed_seconds` | `60` | Per-entry elapsed_seconds cap |
+| problem id | CLI flag on `competition init` | `--problem-id task1` | Problem identifier from competition website |
 
 ### Sensitive values (.env only, never in config.yaml)
 
@@ -52,6 +54,10 @@ competition:
   proxy_port: 4000       # litellm proxy
   ingest_port: 8099      # JSONL ingest server
   log_dir: ~/.hermes/competition_logs  # override directory
+  log:
+    max_span_hours: 12.0           # Max log span (0 = disabled)
+    max_elapsed_seconds: 60.0      # Per-entry elapsed cap
+    allow_binary_check: true
 ```
 
 ## What Each Component Does
