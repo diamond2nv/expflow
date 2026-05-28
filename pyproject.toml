@@ -58,6 +58,10 @@ pipeline = [
 all = [
     "expflow-pde[clearml,optuna,langfuse,pipeline]",
 ]
+ingest = [
+    "fastapi>=0.133.0",
+    "uvicorn>=0.30",
+]
 dev = [
     "ruff",
     "pyright",
