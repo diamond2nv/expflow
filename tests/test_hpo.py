@@ -1039,8 +1039,10 @@ class TestCollectOneTrialEarlyStop:
 class TestMultivariateTPE:
     """Optuna already supports tree-structured TPE natively via Define-by-Run."""
 
+    @pytest.mark.integration
     def test_multivariate_cond_params(self):
         """Optuna Define-by-Run handles conditional arch parameters."""
+        pytest.importorskip("optuna")
         import optuna
 
         def objective(trial):
@@ -1063,8 +1065,10 @@ class TestMultivariateTPE:
         assert study.trials[0].params.get("architecture") in ("FNO", "DeepONet")
         assert "lr" in study.trials[0].params
 
+    @pytest.mark.integration
     def test_multivariate_improves_efficiency(self):
         """multivariate=True should not crash and yields trials."""
+        pytest.importorskip("optuna")
         import optuna
 
         def objective(trial):
@@ -1142,8 +1146,10 @@ class TestSearchGraph:
 class TestPymooIntegration:
     """pymoo provides multi-objective evolutionary algorithms as HPO backend."""
 
+    @pytest.mark.integration
     def test_pymoo_import_and_run(self):
         """pymoo can optimise a simple scalar problem via NSGA-II."""
+        pytest.importorskip("pymoo")
         from expflow_pde.hpo import _has_pymoo, run_hpo_pymoo
 
         assert _has_pymoo, "pymoo should be installed"
@@ -1167,8 +1173,10 @@ class TestPymooIntegration:
         # Best should be near (0, 0) → value near 0
         assert result["best_value"] > -10.0
 
+    @pytest.mark.integration
     def test_pymoo_multi_objective(self):
         """pymoo supports multi-objective with two directions."""
+        pytest.importorskip("pymoo")
         from expflow_pde.hpo import run_hpo_pymoo
 
         space = {

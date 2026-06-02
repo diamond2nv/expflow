@@ -35,7 +35,9 @@ def detect_stagnation(
     max_keep_no_progress: int = 3,
     single_axis_threshold: int = 8,
     max_exhausted_axes: int = 3,
-    significant_improvement_ratio: float = 0.005,
+    significant_improvement_ratio: float = 0.001,
+    saturation_percentile: float = 80.0,
+    saturation_min_experiments: int = 10,
 ) -> dict[str, Any]:
     """Detect stagnation in an experiment tree.
 
@@ -122,16 +124,40 @@ def detect_stagnation(
         result["reason"] = (
             f"KEEP-count stagnation: {keep_without_progress} consecutive "
             f"champion updates without significant gain "
-            f"(threshold: >{significant_improvement_ratio*100:.1f}% relative progress)."
+            f"(threshold: >{significant_improvement_ratio * 100:.1f}% relative progress)."
         )
         result["suggested_action"] = "regroup"
 
+    # Mode 1b: Saturation check (PDE competition-specific)
+    # In PDE competitions, the correct late-game strategy is marginal
+    # gains (< 1% each), not regroup. A better heuristic: check whether
+    # the champion value is in the top saturation_percentile of all
+    # completed experiment values. If it is, continued incremental
+    # progress is expected and NOT stagnation.
+    completed_values = sorted(
+        [
+            e.get("metric_value", 0.0)
+            for e in experiment_history
+            if e.get("status") == "completed" and e.get("metric_value") is not None
+        ],
+    )
+    if completed_values and keep_without_progress >= max_keep_no_progress:
+        champion = completed_values[-1]
+        rank = sum(1 for v in completed_values if v <= champion)
+        pct = rank / len(completed_values) * 100.0
+        if pct >= saturation_percentile and len(completed_values) >= saturation_min_experiments:
+            # Champion is already in the top percentile — marginal gains
+            # are expected, not a sign of stagnation
+            result["stagnant"] = False
+            result["reason"] = (
+                f"Champion at {pct:.0f}th percentile ({len(completed_values)} total exps). "
+                f"Marginal gains expected — not stagnation. "
+                f"Saturation threshold: {saturation_percentile:.0f}th percentile."
+            )
+            result["suggested_action"] = "continue"
+
     # Mode 2: Single-axis exhaustion
-    exhausted = [
-        axis
-        for axis, count in discard_axes.items()
-        if count >= single_axis_threshold
-    ]
+    exhausted = [axis for axis, count in discard_axes.items() if count >= single_axis_threshold]
     result["exhausted_axes"] = exhausted
 
     if len(exhausted) >= max_exhausted_axes:
@@ -196,7 +222,8 @@ def generate_monitor_report(
             ],
         )
         for axis, count in sorted(
-            registry_axes.items(), key=lambda x: -x[1],
+            registry_axes.items(),
+            key=lambda x: -x[1],
         )[:10]:
             lines.append(f"- **{axis}**: {count} dead ends")
 

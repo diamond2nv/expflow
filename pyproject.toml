@@ -80,7 +80,7 @@ expflow = "expflow_pde.cli:main"
 include = ["expflow_pde*"]
 
 [tool.setuptools.package-data]
-expflow_pde = ["skills/*.md"]
+expflow_pde = ["skills/*.md", "data/*.yaml", "data/*.jsonl"]
 "*" = ["skills/**/*.md"]
 
 [tool.pytest.ini_options]

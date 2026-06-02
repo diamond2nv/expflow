@@ -62,6 +62,9 @@ def __getattr__(name: str):
         # monitor
         "detect_stagnation": ("expflow_pde.monitor", "detect_stagnation"),
         "generate_monitor_report": ("expflow_pde.monitor", "generate_monitor_report"),
+        # agent arbiter
+        "arbitrate_agent_outputs": ("expflow_pde.validate", "arbitrate_agent_outputs"),
+        "calibrate_agreement_sigma": ("expflow_pde.validate", "calibrate_agreement_sigma"),
         # semantic client (stdlib only — no optional deps)
         "SemanticClient": ("expflow_pde.semantic_client", "SemanticClient"),
     }
@@ -113,4 +116,6 @@ __all__ = [
     "DeadEndRegistry",
     "detect_stagnation",
     "generate_monitor_report",
+    "arbitrate_agent_outputs",
+    "calibrate_agreement_sigma",
 ]

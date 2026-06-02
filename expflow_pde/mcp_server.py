@@ -29,8 +29,9 @@ def serve() -> None:
     _register_pipeline_tools(mcp)
     _register_audit_tools(mcp)
     _register_system_tools(mcp)
+    _register_agent_tools(mcp)
 
-    print("  [OK] FastMCP server with 24 tools")
+    print("  [OK] FastMCP server with 25 tools")
     mcp.run(transport="stdio")
 
 
@@ -378,3 +379,60 @@ def _register_system_tools(mcp: "FastMCP") -> None:
         from expflow_pde.dispatch_db import DispatchDB
 
         return DispatchDB().get_metrics(experiment_id, name=metric_name)
+
+
+def _register_agent_tools(mcp: "FastMCP") -> None:
+    """Register agent arbiter MCP tools for Hermes /goal mode integration."""
+
+    @mcp.tool()
+    def agent_arbitrate(
+        outputs_json: str,
+        champion_score: float | None = None,
+        score_key: str = "score",
+        sigma_multiplier: float = 2.0,
+    ) -> dict:
+        """Arbitrate N subagent outputs for the same goal.
+
+        Uses inter-rater agreement metrics (not experimental noise floor).
+        Decision flow: compare best vs champion first, THEN assess agreement
+        as a secondary signal — high agreement never blocks promotion.
+
+        Input format (JSON array):
+            [
+                {"output": "...", "score": 85, "agent_id": "a1"},
+                {"output": "...", "score": 82, "agent_id": "a2"}
+            ]
+
+        Args:
+            outputs_json: JSON string of agent output dicts.
+            champion_score: Current best score (None for first round).
+            score_key: Dict key for numeric score (default: 'score').
+            sigma_multiplier: Dispersion band for champion margin (default: 2.0).
+
+        Returns:
+            Dict with keys: action, best_score, agreement, champion_margin, message.
+        """
+        import json as _json
+
+        from expflow_pde.validate import arbitrate_agent_outputs
+
+        try:
+            outputs = _json.loads(outputs_json)
+        except (_json.JSONDecodeError, TypeError, ValueError) as e:
+            return {
+                "action": "error",
+                "message": f"Invalid JSON input: {e}",
+            }
+
+        if not isinstance(outputs, list):
+            return {
+                "action": "error",
+                "message": "Input must be a JSON array of agent output dicts.",
+            }
+
+        return arbitrate_agent_outputs(
+            outputs=outputs,
+            champion_score=champion_score,
+            score_key=score_key,
+            sigma_multiplier=sigma_multiplier,
+        )

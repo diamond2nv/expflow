@@ -451,6 +451,10 @@ class ExperimentPipeline:
         sigma_multiplier: float = 2.0,
         metric_name: str = "seg_total",
         noise_db_path: str | None = None,
+        pde_candidate_value: float | None = None,
+        pde_champion_value: float | None = None,
+        pde_relative_threshold: float | None = None,
+        pde_absolute_floor: float | None = None,
     ) -> dict[str, Any]:
         """Validate a candidate experiment result against the champion.
 
@@ -458,25 +462,69 @@ class ExperimentPipeline:
         If noise_floor is not provided, attempts lazy calibration from
         the noise floor database.
 
+        **PDE residual gate (scale-aware)**: When pde_candidate_value and
+        pde_champion_value are both provided (e.g. 'rans_pde_total' metrics
+        from physics-informed training), uses a combined relative + absolute
+        threshold (Zhang2026 JFM):
+
+            blocked if candidate > max(champion × (1 + relative_threshold),
+                                       champion + absolute_floor)
+
+        This is scale-aware: at any PDE residual magnitude, the gate triggers
+        at a consistent *relative* increase, with an absolute floor preventing
+        false blocks when champion residual is near zero.
+
         Args:
             candidate_value: Metric value from the candidate.
             champion_value: Current champion metric value.
-            sigma_multiplier: Noise band width (default: 2.0).
+            sigma_multiplier: Noise band width (default: 2.0, per AutoScientists).
             metric_name: Metric name for calibration lookup.
             noise_db_path: Override for noise floor DB path.
+            pde_candidate_value: PDE residual from candidate experiment.
+            pde_champion_value: PDE residual from current champion.
+            pde_relative_threshold: Fractional increase allowed (default: 0.50).
+                Pass 0.20 for stricter gating, 1.0 for relaxed.
+            pde_absolute_floor: Min absolute threshold gap (default: 0.01).
+                Prevents trivial blocks when residual ~0.
 
         Returns:
             Validation result dict with action/promote/confirm/reject.
+            Includes 'pde_gate_blocked' key if PDE residual gate vetoed.
         """
-        from expflow_pde.validate import noise_aware_validate
+        from expflow_pde.validate import noise_aware_validate, check_pde_residual_gate
 
-        return noise_aware_validate(
+        # ── Primary metric validation ──
+        primary = noise_aware_validate(
             candidate_value=candidate_value,
             champion_value=champion_value,
             sigma_multiplier=sigma_multiplier,
             noise_db_path=noise_db_path or self._noise_db_path,
             metric_name=metric_name,
         )
+
+        # ── PDE residual gate (scale-aware, Zhang2026) ──
+        pde_blocked = False
+        gate_result: dict[str, Any] = {}
+        if pde_candidate_value is not None and pde_champion_value is not None:
+            gate_result = check_pde_residual_gate(
+                candidate_residual=pde_candidate_value,
+                champion_residual=pde_champion_value,
+                relative_threshold=pde_relative_threshold,
+                absolute_floor=pde_absolute_floor,
+            )
+            if gate_result["blocked"]:
+                pde_blocked = True
+                primary["action"] = "reject"
+                primary["message"] += f" [{gate_result['message']}]"
+
+        primary["pde_gate_blocked"] = pde_blocked
+        primary["pde_gate_details"] = gate_result
+        if pde_candidate_value is not None:
+            primary["pde_candidate"] = pde_candidate_value
+        if pde_champion_value is not None:
+            primary["pde_champion"] = pde_champion_value
+
+        return primary
 
     # ── Dead-end registry ──
 
@@ -497,6 +545,9 @@ class ExperimentPipeline:
         args: dict[str, Any] | None = None,
         code_hash: str | None = None,
         metric_value: float | None = None,
+        bucket: str | None = None,
+        bucket_low: float | None = None,
+        bucket_high: float | None = None,
     ) -> dict[str, Any]:
         """Register a failed experiment direction in the dead-end registry.
 
@@ -507,6 +558,10 @@ class ExperimentPipeline:
             args: Hyperparameters used.
             code_hash: Git commit hash.
             metric_value: Final metric value if applicable.
+            bucket: Sub-axis bucket for grouped matching
+                (e.g. 'n_modes' groups n_modes=8 and n_modes=24).
+            bucket_low: Numeric range low end (interval overlap).
+            bucket_high: Numeric range high end.
 
         Returns:
             Dict with entry_id and timestamp.
@@ -518,6 +573,9 @@ class ExperimentPipeline:
             args=args,
             code_hash=code_hash,
             metric_value=metric_value,
+            bucket=bucket,
+            bucket_low=bucket_low,
+            bucket_high=bucket_high,
         )
 
     def lookup_dead_end(
@@ -526,14 +584,26 @@ class ExperimentPipeline:
         axis: str,
         args: dict[str, Any] | None = None,
         exact: bool = False,
+        bucket: str | None = None,
+        bucket_value: float | None = None,
     ) -> list[dict[str, Any]]:
         """Check if an approach has been tried and failed before.
+
+        Three lookup modes:
+        - **Exact**: perfect hash match on script+args+axis.
+        - **Bucket fuzzy** (exact=False, bucket=...): matches on
+          (script, axis, bucket) — n_modes=8 and n_modes=24
+          hit the same bucket.
+        - **Wildcard** (exact=False, bucket=None): any entry on
+          script+axis.
 
         Args:
             script: Script name.
             axis: Search axis.
             args: Hyperparameters (for exact match only).
             exact: If True, requires perfect (script+args+axis) match.
+            bucket: Sub-axis bucket for fuzzy grouping.
+            bucket_value: Numeric value for interval-overlap filter.
 
         Returns:
             List of matching dead-end entries.
@@ -543,4 +613,6 @@ class ExperimentPipeline:
             axis=axis,
             args=args,
             exact=exact,
+            bucket=bucket,
+            bucket_value=bucket_value,
         )

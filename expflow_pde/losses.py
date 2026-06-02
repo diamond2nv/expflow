@@ -446,6 +446,57 @@ class RANSPDELoss(nn.Module):
         if reduction not in ("mean", "sum"):
             raise ValueError(f"reduction must be 'mean' or 'sum', got '{reduction}'")
         self.reduction = reduction
+        self._warned_disconnected: set[str] = set()
+
+    def _check_graph_integrity(
+        self,
+        u: torch.Tensor,
+        p: torch.Tensor,
+    ) -> None:
+        """Verify that u and p are connected to the collocation input graph.
+
+        If p.grad_fn is None after passing through model(x,y,t), the
+        pressure gradient term ∇p will be silently zero in the PDE
+        residual. This is the #1 failure mode in PINN implementations.
+
+        Raises a warning (only once per instance) instead of failing,
+        because there are legitimate use cases (e.g. pressure-less
+        flows) where ∇p is deliberately skipped.
+        """
+        # Check u: the velocity field MUST be differentiable w.r.t. colloc
+        if not u.requires_grad:
+            key = "u_no_grad"
+            if key not in self._warned_disconnected:
+                import warnings as _w
+
+                _w.warn(
+                    "RANSPDELoss: u_pred does not require grad. "
+                    "Velocity gradients w.r.t. collocation points will be ZERO. "
+                    "Ensure u is the direct output of model(colloc_xt).",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                self._warned_disconnected.add(key)
+
+        # Check p: pressure gradient ∇p is part of the momentum residual
+        if p is not None:
+            p_has_graph = p.grad_fn is not None or (hasattr(p, "requires_grad") and p.requires_grad)
+            if not p_has_graph:
+                key = "p_disconnected"
+                if key not in self._warned_disconnected:
+                    import warnings as _w
+
+                    _w.warn(
+                        "RANSPDELoss: pressure tensor p_pred has no grad_fn "
+                        "and does not require grad. The pressure gradient "
+                        "term ∇p in the momentum equation will be ZERO. "
+                        "This silently disables a critical term in the PDE "
+                        "residual. Pass the raw model output (not detached) "
+                        "as p_pred.",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                    self._warned_disconnected.add(key)
 
     def _pde_residual(
         self,
@@ -549,6 +600,8 @@ class RANSPDELoss(nn.Module):
                 - 'rans_div_free': Scalar divergence-free residual.
                 - 'rans_continuity': Same as div_free (alias for metric tracking).
         """
+        # CRITICAL: verify computational graph integrity before computing
+        self._check_graph_integrity(u_pred, p_pred)
         res_x, res_y, res_div = self._pde_residual(u_pred, p_pred, colloc_xt)
 
         if self.reduction == "mean":
@@ -699,10 +752,13 @@ def loss_selector(
     Args:
         name: One of 'l1_rel', 'l2_rel', 'h1_1d', 'h1_2d',
               'mse_rel', 'smoothl1_rel', 'l2_abs', 'mse_abs',
-              'rans_pde'.
+              'rans_pde', 'pinn_composite'.
         size_mean: Default reduction mode.
         **kwargs: Additional parameters passed to the loss constructor
                   (e.g., ``beta=2.0`` for H1 losses, ``p=1`` for LprelLoss).
+                  For ``pinn_composite``: ``data_loss='mse_rel'``,
+                  ``nu=0.001``, ``lambda_data=1.0``, ``lambda_pde=1.0``.
+                  For ``rans_pde``: ``nu=0.001``, ``div_weight=1.0``.
 
     Returns:
         Configured loss module.
@@ -710,7 +766,7 @@ def loss_selector(
     Raises:
         ValueError: If name is not recognised.
     """
-    registry: dict[str, type] = {
+    registry = {
         "l1_rel": LprelLoss,
         "l2_rel": LprelLoss,
         "h1_1d": H1relLoss_1D,
@@ -720,6 +776,7 @@ def loss_selector(
         "l2_abs": lpLoss,
         "mse_abs": nn.MSELoss,
         "rans_pde": RANSPDELoss,
+        "pinn_composite": "special",
     }
 
     if name not in registry:
@@ -727,23 +784,44 @@ def loss_selector(
 
     cls = registry[name]
 
+    # Special case: PINNCompositeLoss needs a data_loss + pde_loss sub-config
+    if name == "pinn_composite":
+        data_loss_name = kwargs.get("data_loss", "mse_rel")
+        data_loss_module = loss_selector(data_loss_name, size_mean=size_mean)
+        pde_loss = RANSPDELoss(
+            nu=kwargs.get("nu", 0.001),
+            div_weight=kwargs.get("div_weight", 1.0),
+            reduction=kwargs.get("reduction", "mean"),
+        )
+        return PINNCompositeLoss(
+            data_loss=data_loss_module,
+            pde_loss=pde_loss,
+            lambda_data=kwargs.get("lambda_data", 1.0),
+            lambda_pde=kwargs.get("lambda_pde", 1.0),
+            lambda_bc=kwargs.get("lambda_bc", 0.0),
+            adaptive=kwargs.get("adaptive", False),
+        )
+
+    # All remaining entries are nn.Module subclasses (not "special")
+    ctor: type[nn.Module] = cls  # type: ignore[assignment]
+
     if name == "l1_rel":
-        return cls(p=kwargs.get("p", 1), size_mean=size_mean)
+        return ctor(p=kwargs.get("p", 1), size_mean=size_mean)
     elif name == "l2_rel":
-        return cls(p=kwargs.get("p", 2), size_mean=size_mean)
+        return ctor(p=kwargs.get("p", 2), size_mean=size_mean)
     elif name in ("h1_1d", "h1_2d"):
-        return cls(
+        return ctor(
             beta=kwargs.get("beta", 1.0),
             alpha=kwargs.get("alpha", 1.0),
             size_mean=size_mean,
         )
     elif name == "mse_abs":
-        return cls()  # nn.MSELoss has no size_mean
+        return ctor()  # nn.MSELoss has no size_mean
     elif name == "rans_pde":
-        return cls(
+        return ctor(
             nu=kwargs.get("nu", 0.001),
             div_weight=kwargs.get("div_weight", 1.0),
             reduction=kwargs.get("reduction", "mean"),
         )
     else:
-        return cls(size_mean=size_mean)
+        return ctor(size_mean=size_mean)
