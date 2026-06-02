@@ -352,6 +352,55 @@ EQUATIONS: dict[str, dict[str, Any]] = {
         "solver": "Finite volume / Godunov scheme",
         "data_samples": 1000,
     },
+    "cylinder_rans": {
+        "full_name": "2D RANS Cylinder Wake (Zhang 2026)",
+        "latex": (
+            r"\partial_t \bar{u}_i + \bar{u}_j \partial_j \bar{u}_i = "
+            r"-\partial_i \bar{p} + \nu \partial_{jj} \bar{u}_i"
+            r" + \partial_j \tau_{ij},\; \partial_i \bar{u}_i = 0,"
+            r"\quad (x,y) \in [-10,25] \times [-5,5]"
+        ),
+        "latex_short": (
+            r"\partial_t\bar{u}+(\bar{u}\cdot\nabla)\bar{u}"
+            r"=-\nabla\bar{p}+\nu\nabla^2\bar{u}+\nabla\cdot\tau,\;"
+            r"\nabla\cdot\bar{u}=0"
+        ),
+        "dim": 2,
+        "time_dependent": True,
+        "competition_task": None,
+        "viscosity_params": "nu (kinematic viscosity)",
+        "nu_values": [0.001],
+        "description": (
+            "2D Reynolds-Averaged Navier-Stokes (RANS) for flow past a circular "
+            "cylinder at Re=3900 (Zhang et al., JFM 2026). Benchmark problem for "
+            "physics-informed neural operator training. The RANS equations model "
+            "the mean velocity field (u_bar) with Reynolds stress tensor tau "
+            "capturing turbulent fluctuations. Training uses both data loss "
+            "(on observed velocity fields) and PDE residual loss (RANS equations "
+            "enforced via automatic differentiation). Domain: x in [-10, 25], "
+            "y in [-5, 5] with cylinder of diameter D=1 centered at (0,0)."
+        ),
+        "metrics": [
+            "val_mse",
+            "val_relmse",
+            "rans_pde_total",
+            "rans_div_free",
+            "rans_continuity",
+            "rans_momentum_x",
+            "rans_momentum_y",
+            "train_time_min",
+            "arch_params",
+            "epochs",
+        ],
+        "references": [
+            "Zhang et al., JFM 2026 — RANS PINN cylinder flow",
+            "JFM benchmark: cylinder Re=3900, D=1, domain [-10,25]x[-5,5]",
+        ],
+        "solver": "DNS reference (JFM benchmark data)",
+        "data_samples": "Reference DNS dataset",
+        "ic_distribution": "Developed turbulent wake (steady-state mean)",
+        "competition_info": None,
+    },
     "kuramoto_sivashinsky": {
         "full_name": "Kuramoto-Sivashinsky Equation",
         "latex": (

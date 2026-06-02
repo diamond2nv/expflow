@@ -27,6 +27,9 @@ working on this project. It describes the project structure, key patterns, pitfa
 │   ├── analyze.py       # PDE competition intelligence
 │   ├── equations.py     # PDE formula registry (11 equations)
 │   ├── worktree.py      # Git worktree for experiment isolation
+│   ├── validate.py      # [NEW] Noise-aware champion validation (AutoScientists-style)
+│   ├── registry.py      # [NEW] Cross-session dead-end registry
+│   ├── monitor.py       # [NEW] Stagnation detection + experiment reports
 │   ├── cli_clearml.py   # clearml command group (14 sub-commands)
 │   ├── cli_optuna.py    # optuna command group (8 sub-commands)
 │   ├── cli_langfuse.py  # langfuse command group (6 sub-commands)

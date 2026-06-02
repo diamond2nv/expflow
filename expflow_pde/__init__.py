@@ -53,6 +53,15 @@ def __getattr__(name: str):
         "scheduler_start": ("expflow_pde.clearml", "scheduler_start"),
         # pipeline
         "ExperimentPipeline": ("expflow_pde.pipeline", "ExperimentPipeline"),
+        # validation / noise gating
+        "noise_aware_validate": ("expflow_pde.validate", "noise_aware_validate"),
+        "calibrate_noise_floor": ("expflow_pde.validate", "calibrate_noise_floor"),
+        "record_noise_entry": ("expflow_pde.validate", "record_noise_entry"),
+        # dead-end registry
+        "DeadEndRegistry": ("expflow_pde.registry", "DeadEndRegistry"),
+        # monitor
+        "detect_stagnation": ("expflow_pde.monitor", "detect_stagnation"),
+        "generate_monitor_report": ("expflow_pde.monitor", "generate_monitor_report"),
         # semantic client (stdlib only — no optional deps)
         "SemanticClient": ("expflow_pde.semantic_client", "SemanticClient"),
     }
@@ -98,4 +107,10 @@ __all__ = [
     "scheduler_list",
     "scheduler_remove_task",
     "scheduler_start",
+    "noise_aware_validate",
+    "calibrate_noise_floor",
+    "record_noise_entry",
+    "DeadEndRegistry",
+    "detect_stagnation",
+    "generate_monitor_report",
 ]

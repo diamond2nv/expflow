@@ -39,6 +39,7 @@ Mode C — **custom skip**:
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -79,6 +80,8 @@ class ExperimentPipeline:
         self.docker = docker
         self.abort_on_failure = abort_on_failure
         self.add_run_number = add_run_number
+        self._noise_db_path = os.path.expanduser("~/.expflow/noise_floor.jsonl")
+        self._registry = None  # lazy import for DeadEndRegistry
         # ── 3-tier packages resolution ──
         # 1) Explicit constructor arg (highest priority)
         # 2) config.yaml pipeline.packages
@@ -438,3 +441,106 @@ class ExperimentPipeline:
     def last_result(self) -> dict[str, Any] | None:
         """Return the result from the most recent pipeline call."""
         return self._last_result
+
+    # ── Experiment validation (noise-aware champion promotion) ──
+
+    def validate_experiment(
+        self,
+        candidate_value: float,
+        champion_value: float,
+        sigma_multiplier: float = 2.0,
+        metric_name: str = "seg_total",
+        noise_db_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate a candidate experiment result against the champion.
+
+        Uses noise-aware champion validation (AutoScientists-style).
+        If noise_floor is not provided, attempts lazy calibration from
+        the noise floor database.
+
+        Args:
+            candidate_value: Metric value from the candidate.
+            champion_value: Current champion metric value.
+            sigma_multiplier: Noise band width (default: 2.0).
+            metric_name: Metric name for calibration lookup.
+            noise_db_path: Override for noise floor DB path.
+
+        Returns:
+            Validation result dict with action/promote/confirm/reject.
+        """
+        from expflow_pde.validate import noise_aware_validate
+
+        return noise_aware_validate(
+            candidate_value=candidate_value,
+            champion_value=champion_value,
+            sigma_multiplier=sigma_multiplier,
+            noise_db_path=noise_db_path or self._noise_db_path,
+            metric_name=metric_name,
+        )
+
+    # ── Dead-end registry ──
+
+    @property
+    def _dead_end_registry(self):
+        """Lazy-loaded DeadEndRegistry instance."""
+        if self._registry is None:
+            from expflow_pde.registry import DeadEndRegistry
+
+            self._registry = DeadEndRegistry()
+        return self._registry
+
+    def register_dead_end(
+        self,
+        script: str,
+        axis: str,
+        reason: str,
+        args: dict[str, Any] | None = None,
+        code_hash: str | None = None,
+        metric_value: float | None = None,
+    ) -> dict[str, Any]:
+        """Register a failed experiment direction in the dead-end registry.
+
+        Args:
+            script: Script that was run.
+            axis: Search axis that failed (learning_rate, architecture, etc.).
+            reason: Failure reason.
+            args: Hyperparameters used.
+            code_hash: Git commit hash.
+            metric_value: Final metric value if applicable.
+
+        Returns:
+            Dict with entry_id and timestamp.
+        """
+        return self._dead_end_registry.register(
+            script=script,
+            axis=axis,
+            reason=reason,
+            args=args,
+            code_hash=code_hash,
+            metric_value=metric_value,
+        )
+
+    def lookup_dead_end(
+        self,
+        script: str,
+        axis: str,
+        args: dict[str, Any] | None = None,
+        exact: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Check if an approach has been tried and failed before.
+
+        Args:
+            script: Script name.
+            axis: Search axis.
+            args: Hyperparameters (for exact match only).
+            exact: If True, requires perfect (script+args+axis) match.
+
+        Returns:
+            List of matching dead-end entries.
+        """
+        return self._dead_end_registry.lookup(
+            script=script,
+            axis=axis,
+            args=args,
+            exact=exact,
+        )

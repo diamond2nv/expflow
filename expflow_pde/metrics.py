@@ -49,6 +49,12 @@ STANDARD_METRICS: dict[str, dict[str, Any]] = {
     "pde_seg1": {"type": "scalar", "group": "PDE", "higher_is_better": False},
     "pde_seg2": {"type": "scalar", "group": "PDE", "higher_is_better": False},
     "pde_seg3": {"type": "scalar", "group": "PDE", "higher_is_better": False},
+    # ── RANS PDE residual group (lower is better) ──
+    "rans_pde_total": {"type": "scalar", "group": "RANS", "higher_is_better": False},
+    "rans_div_free": {"type": "scalar", "group": "RANS", "higher_is_better": False},
+    "rans_continuity": {"type": "scalar", "group": "RANS", "higher_is_better": False},
+    "rans_momentum_x": {"type": "scalar", "group": "RANS", "higher_is_better": False},
+    "rans_momentum_y": {"type": "scalar", "group": "RANS", "higher_is_better": False},
     # ── Other ──
     "train_time_min": {"type": "scalar", "group": "Time", "higher_is_better": False},
     "arch_params": {"type": "scalar", "group": "Model", "higher_is_better": False},

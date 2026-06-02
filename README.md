@@ -217,6 +217,17 @@ python -m pytest tests/ -v             # Run tests
 python -m build                        # Build package
 ```
 
+## Acknowledgements
+
+This project builds on ideas and mathematical formulations from several research works:
+
+- **HyperNOs** (arXiv:2503.18087) — Relative norm loss formulation (L^p, H^1 Sobolev via FFT) used in `losses.py` as the design pattern for the relative norm loss family.
+- **AutoScientists** (arXiv:2605.28655, Harvard/MIMS 2026) — Noise-aware champion validation, lazy sigma calibration, stagnation detection, and dead-end registry concepts implemented in `validate.py`, `registry.py`, and `monitor.py`. Independent implementation based on published algorithmic description.
+- **Zhang et al. (JFM, 2026)** — Physics-informed RANS PDE residual loss (`RANSPDELoss`, `PINNCompositeLoss`) design follows the physics-informed neural operator training methodology for 2D cylinder flow. Independent implementation from published mathematical formulation.
+- **PDEBench** (arXiv:2207.05209) — Standard evaluation metrics and PDE equation definitions used across the metric registry.
+
+All code is original and written from scratch. Only the mathematical/algorithmic ideas are referenced.
+
 ## License
 
 MIT
