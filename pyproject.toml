@@ -92,6 +92,9 @@ addopts = "-q --tb=short"
 markers = [
     "slow: marks tests as slow, deselected by default",
     "integration: marks tests that need external services (clearml/optuna/langfuse)",
+    "gate_b: Base functionality verification gates (B10-B11)",
+    "gate_c: Topology/pipeline verification gates (C01-C02)",
+    "gate_f: Magnitude/config verification gates (F01-F02)",
 ]
 
 [tool.coverage.run]
