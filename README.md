@@ -7,6 +7,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/expflow-pde)](https://pypi.org/project/expflow-pde/)
 [![Python versions](https://img.shields.io/pypi/pyversions/expflow-pde)](https://pypi.org/project/expflow-pde/)
 [![License](https://img.shields.io/github/license/diamond2nv/expflow)](https://github.com/diamond2nv/expflow/blob/master/LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/diamond2nv/expflow)
 
 **Experiment workflow orchestration toolkit for PDEBench/Agentic4Sci.**
 
@@ -133,10 +134,10 @@ Skills live in the repository's `skills/` directory — install via URL:
 
 ```bash
 # Install individual skills
-hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/expflow-pipeline-hpo/SKILL.md
-hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/experiment-lifecycle-governance/SKILL.md
-hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/clearml-metrics-logging-pattern/SKILL.md
-hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/main/skills/competition-task-intelligence/SKILL.md
+hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/master/skills/expflow-pipeline-hpo/SKILL.md
+hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/master/skills/experiment-lifecycle-governance/SKILL.md
+hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/master/skills/clearml-metrics-logging-pattern/SKILL.md
+hermes skills install https://raw.githubusercontent.com/diamond2nv/expflow/master/skills/competition-task-intelligence/SKILL.md
 
 # Or tap the repo for easier access
 hermes skills tap add diamond2nv/expflow
