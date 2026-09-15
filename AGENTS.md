@@ -204,6 +204,61 @@ twine upload dist/*
 - `pytest` must pass all tests
 - `pyright` zero errors in `expflow_pde/` package
 
+## Public-Release Sanitization (MANDATORY)
+
+> ⛔ This repo's `master` is **the public line**: it tracks `github`
+> (`github.com/diamond2nv/expflow`) at 0/0. **Anything committed to `master` and pushed
+> becomes public immediately.**
+>
+> | remote | nature | safe for sensitive edits |
+> |:--|:--|:--|
+> | `github` | **public** (github.com/diamond2nv) | ✗ |
+> | `mirror` | **semi-public** — Aliyun Codeup, a *private repo cloud backup* (not a public host, but do not treat it as a private channel either) | ✗ for real secrets |
+> | `nas` | **private** — LAN Forgejo (`My_Hermes_Team/expflow`) | ✓ |
+>
+> ⚠️ **Remote names differ per repo.** In this working copy the private LAN remote is
+> **`nas`** — this repo has **no `forgejo` and no `origin`**. (In `hfpapers-crawler` the
+> same LAN host is named `forgejo`, and its `origin` is the lab's internal GitLab.)
+> **Run `git remote -v` before trusting any remote name in any doc, including this one.**
+
+### What must NEVER appear in tracked files
+
+| Category | Rule | Approved placeholder |
+|----------|------|---------------------|
+| Private LAN IPs | `192.168.x.x`, `10.x`, `172.16-31.x` | `<lan-host-ip>` |
+| Real person names | real researcher/owner names in examples or docs | `Jane Doe` / `张三` |
+| ORCID iDs | real ORCIDs — they identify an individual | `0000-0002-1825-0097` (ORCID's own spec example) |
+| Personal emails | real usernames in contact strings | `dev@example.com` |
+| Machine home paths | `/home/<real-user>/...` in tracked files | `os.path.expanduser("~/...")` |
+| Internal machine codenames | host codenames of LAN peers in public docs | generic "LAN peer" |
+| Internal endpoints | NAS DokuWiki / Forgejo / lab GitLab URLs | `see .hermes/internal-guide.md` |
+
+### Rules
+
+1. **Examples use neutral identities** — `Jane Doe`, `Smith, John`, `张三`, never real
+   people or the repo owner.
+2. **Real values live in `.hermes/internal-guide.md`** (gitignored, LAN-only). Tracked
+   files carry placeholders that point there.
+3. **Sensitive work goes to `nas`, never to `master`.** Do not "temporarily" commit to
+   `master` intending to revert — `master` is pushed to a public remote.
+4. **Before pushing `master` (or tagging a release)**, run:
+
+   ```bash
+   git ls-files -z | xargs -0 grep -nE \
+     '192\.168\.|(^|[^0-9A-Za-z._=:-])10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9]|$)|172\.(1[6-9]|2[0-9]|3[01])\.|/home/[a-z]+|0000-000[0-9]-[0-9]{4}-[0-9]{3}[0-9X]|sk-[A-Za-z0-9]{16}|@(126|163|qq|gmail)\.com'
+   ```
+
+   and confirm **zero hits**. Two hard-won lessons (inherited from `hfpapers-crawler`):
+
+   - **A check that cannot see the category it exists to protect is worse than no check** —
+     it grants false confidence. Real ORCIDs sat in tracked files while a narrower command
+     reported clean; the ORCID pattern above was added after that incident.
+   - **`10.x` needs the version-number guard** — a bare `10\.[0-9]+\.[0-9]+\.[0-9]+` also
+     matches dependency pins such as `10.0.0`, producing constant false positives that
+     train people to ignore the check.
+5. **Commit messages are tracked content too** — keep codenames, LAN addresses and real
+   names out of them.
+
 ## Git Conventions
 
 ```bash
