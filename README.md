@@ -21,18 +21,32 @@ Manage ML experiments across ClearML, Optuna, and Langfuse from a single CLI —
 
 ### Install
 
+`uv` is recommended — the CLI then lives in its own environment (no conflicts with your project):
+
 ```bash
-# Core CLI (no external SDKs needed)
+# 1) uv tool — isolated CLI install, `expflow` on your PATH
+uv tool install expflow-pde
+
+# 2) run it without installing anything
+uvx --from expflow-pde expflow --help
+
+# 3) inside an existing project / venv (uv-managed)
+uv pip install expflow-pde
+
+# 4) no uv — pip and pipx both work
 pip install expflow-pde
+pipx install expflow-pde        # needs a recent pipx; 1.0.0 cannot parse git specs
+```
 
-# With all SDK integrations
-pip install "expflow-pde[all]"
+**Extras** (SDK integrations — add to any of the above, e.g. `uv tool install "expflow-pde[all]"`):
 
-# Individual extras
+```bash
+pip install "expflow-pde[all]"       # clearml + optuna + langfuse + pipeline
 pip install "expflow-pde[clearml]"   # Task/queue/dataset management
 pip install "expflow-pde[optuna]"    # Hyperparameter optimization
 pip install "expflow-pde[langfuse]"  # LLM observability traces
 pip install "expflow-pde[mcp]"       # MCP server + all SDKs
+pip install "expflow-pde[pipeline]"  # pipeline mode (ClearML-backed)
 ```
 
 ### Verify

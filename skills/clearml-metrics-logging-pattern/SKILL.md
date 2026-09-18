@@ -4,7 +4,7 @@ description: Standardized ClearML metrics logging patterns for PDEBench experime
 category: mlops
 tags: [clearml, metrics, logging, experiment-tracking, pdebench]
 author: Li Shen
-version: 0.7.0
+version: 0.7.1
 metadata:
   hermes:
     tags: [mlops, pde, clearml, metrics, logging, experiment, competition]
@@ -33,11 +33,14 @@ pip install "expflow-pde[clearml]"
 (0.7.3): anything marked "development line" below is not in the PyPI 0.7.0 artifact.
 
 ```bash
-uv tool install expflow-pde        # isolated CLI, recommended
-uvx expflow --help                 # try without installing
-uv pip install expflow-pde         # inside an existing project
-pip install expflow-pde            # no uv available
+uv tool install expflow-pde                  # 1) isolated CLI, `expflow` on PATH (recommended)
+uvx --from expflow-pde expflow --help        # 2) run it without installing anything
+uv pip install expflow-pde                   # 3) inside an existing project / venv
+pip install expflow-pde                      # 4) no uv — pip and pipx both work
+pipx install expflow-pde                     #    (pipx needs a recent version; 1.0.0 cannot parse specs)
+# extras ride along with any form, e.g.: uv tool install "expflow-pde[clearml]"
 ```
+*All five forms above were run and verified (uv tool install / uvx --from / uv pip / pip / pipx).*
 
 ## Standardized Metric Naming Convention
 

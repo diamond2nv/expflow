@@ -4,7 +4,7 @@ title: Experiment Lifecycle Governance — PIN, Metrics Registry, Compare-Scores
 description: Add governance to experiment workflows — PIN-protected destructive ops, standardized metrics registry with thresholds, compare-scores ranking with gating, and competition rules audit. Builds on clearml-agent-dispatch and fysom-fsm-integration.
 category: mlops
 author: Li Shen
-version: 0.7.0
+version: 0.7.1
 tags: [governance, pin, metrics, compare, audit, guard, competition, safety]
 metadata:
   hermes:
@@ -36,11 +36,14 @@ pip install expflow-pde
 (0.7.3): anything marked "development line" below is not in the PyPI 0.7.0 artifact.
 
 ```bash
-uv tool install expflow-pde        # isolated CLI, recommended
-uvx expflow --help                 # try without installing
-uv pip install expflow-pde         # inside an existing project
-pip install expflow-pde            # no uv available
+uv tool install expflow-pde                  # 1) isolated CLI, `expflow` on PATH (recommended)
+uvx --from expflow-pde expflow --help        # 2) run it without installing anything
+uv pip install expflow-pde                   # 3) inside an existing project / venv
+pip install expflow-pde                      # 4) no uv — pip and pipx both work
+pipx install expflow-pde                     #    (pipx needs a recent version; 1.0.0 cannot parse specs)
+# extras ride along with any form, e.g.: uv tool install "expflow-pde[clearml]"
 ```
+*All five forms above were run and verified (uv tool install / uvx --from / uv pip / pip / pipx).*
 
 ## 1. PIN Protection Pattern
 
