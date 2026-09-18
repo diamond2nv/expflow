@@ -2,8 +2,9 @@
 name: clearml-metrics-logging-pattern
 description: Standardized ClearML metrics logging patterns for PDEBench experiment scripts — train loss, validation metrics, competition scores, PDE residual, and TensorBoardX integration. Includes patterns for dist/expflow compatibility.
 category: mlops
+tags: [clearml, metrics, logging, experiment-tracking, pdebench]
 author: Li Shen
-version: 1.0.0
+version: 0.7.0
 metadata:
   hermes:
     tags: [mlops, pde, clearml, metrics, logging, experiment, competition]
@@ -22,8 +23,20 @@ metadata:
 
 ## Installation
 
+
+
 ```bash
 pip install "expflow-pde[clearml]"
+```
+
+**Version floor**: install `expflow-pde>=0.7.0` (public/PyPI line). The development line is ahead
+(0.7.3): anything marked "development line" below is not in the PyPI 0.7.0 artifact.
+
+```bash
+uv tool install expflow-pde        # isolated CLI, recommended
+uvx expflow --help                 # try without installing
+uv pip install expflow-pde         # inside an existing project
+pip install expflow-pde            # no uv available
 ```
 
 ## Standardized Metric Naming Convention
@@ -137,6 +150,28 @@ class DoubleLogger:
 - Metric names match `STANDARD_METRICS` keys (via underscore)
 - `iteration` must increment monotonically (clearml x-axis requirement)
 - Single-value eval metrics use `iteration=1`
+
+
+## Hermes Agent Environment
+
+- **MCP server** — `expflow mcp` starts a FastMCP server (18+ tools) for agent integration:
+
+  ```yaml
+  # ~/.hermes/config.yaml
+  mcp:
+    servers:
+      expflow:
+        command: "expflow"
+        args: ["mcp"]
+  ```
+
+- **Config** — `expflow init` writes the toolkit config; real credentials (ClearML API, Langfuse
+  keys, dataset paths) belong in `.env` / a local `config.yaml`, never in tracked files.
+- **Environment overrides** — `EXPFLOW_HOME`, `EXPFLOW_PIN_HASH`, `EXPFLOW_COMPETITION_DEADLINE`,
+  `EXPFLOW_SEMANTIC_URL`.
+- **Cost profile (not zero-cost)** — the orchestration layer itself makes no LLM call, but runs cost
+  real money and hardware: ClearML workers/queue time, GPU hours for the submitted experiments, and
+  storage for artifacts. Quote costs from recorded runs, never an estimate.
 
 ## Known Pitfalls
 

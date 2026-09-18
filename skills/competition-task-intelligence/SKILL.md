@@ -7,7 +7,7 @@ description: >
   for research focus, and expose this intelligence via CLI and MCP tools.
 category: mlops
 author: Li Shen
-version: 1.0.0
+version: 0.7.0
 tags: [mlops, competition, strategy, equations, analysis, planning, pde, task-intelligence]
 metadata:
   hermes:
@@ -37,8 +37,20 @@ System for structured PDE equation management and competition task analysis. Pro
 
 ## Installation
 
+
+
 ```bash
 pip install expflow-pde
+```
+
+**Version floor**: install `expflow-pde>=0.7.0` (public/PyPI line). The development line is ahead
+(0.7.3): anything marked "development line" below is not in the PyPI 0.7.0 artifact.
+
+```bash
+uv tool install expflow-pde        # isolated CLI, recommended
+uvx expflow --help                 # try without installing
+uv pip install expflow-pde         # inside an existing project
+pip install expflow-pde            # no uv available
 ```
 
 ## Architecture
@@ -128,6 +140,28 @@ rec = get_strategic_recommendation()
 
 ### With analyze-experiment-autoregressive-degradation
 Chain: `analyze advise → decide task → run experiment → analyze degradation → feed back to _TASK_META`.
+
+
+## Hermes Agent Environment
+
+- **MCP server** — `expflow mcp` starts a FastMCP server (18+ tools) for agent integration:
+
+  ```yaml
+  # ~/.hermes/config.yaml
+  mcp:
+    servers:
+      expflow:
+        command: "expflow"
+        args: ["mcp"]
+  ```
+
+- **Config** — `expflow init` writes the toolkit config; real credentials (ClearML API, Langfuse
+  keys, dataset paths) belong in `.env` / a local `config.yaml`, never in tracked files.
+- **Environment overrides** — `EXPFLOW_HOME`, `EXPFLOW_PIN_HASH`, `EXPFLOW_COMPETITION_DEADLINE`,
+  `EXPFLOW_SEMANTIC_URL`.
+- **Cost profile (not zero-cost)** — the orchestration layer itself makes no LLM call, but runs cost
+  real money and hardware: ClearML workers/queue time, GPU hours for the submitted experiments, and
+  storage for artifacts. Quote costs from recorded runs, never an estimate.
 
 ## Pitfalls
 
