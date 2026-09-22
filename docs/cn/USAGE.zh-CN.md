@@ -1,5 +1,23 @@
 # expflow-pde 使用指南
 
+## Exo 三件套的论文层 —— 论文 → 实验 → 机器可验证的证明
+
+三个独立 CLI，共用一条链。各自独立许可与发布节奏，只通过**文件与 CLI 调用**衔接，互不 import。
+
+| 层 | 工具 | 安装 |
+|:--|:--|:--|
+| **论文** | **hfpclawer**（本仓） | `uv tool install hfpclawer` |
+| 实验 | **expflow-pde** | `uv tool install expflow-pde` |
+| 证明 | **omega-architect**（`omega`） | `uv tool install "omega-architect @ git+https://github.com/diamond2nv/omega-architect@v0.2.3"` |
+
+成本按**设计分层：低 → 中 → 高**，并点明花 token 的步骤（摘要分流、排序、T1 校验）；
+机械路径不调 LLM、无需 API key，但带宽、磁盘、CPU 与 arXiv/OpenAlex 的上游限流仍然存在。
+
+**Agent 技能**（ClawHub，owner [`@diamond2nv`](https://clawhub.ai/diamond2nv)，建议先装入口技能）：
+`exo-suite-linkage` · `hfpclawer-paper-search` · `hfpclawer-citation-audit` · `hfpclawer-formula-verify` ·
+`hfpclawer-academic-integrity` · `expflow-pipeline-hpo` · `experiment-lifecycle-governance` ·
+`clearml-metrics-logging-pattern` · `competition-task-intelligence` · `omega-architect-formal-proof`
+
 ## 安装
 
 ```bash
