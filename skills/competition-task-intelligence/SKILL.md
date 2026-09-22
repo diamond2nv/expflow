@@ -7,7 +7,7 @@ description: >
   for research focus, and expose this intelligence via CLI and MCP tools.
 category: mlops
 author: Li Shen
-version: 0.7.1
+version: 0.7.2
 tags: [mlops, competition, strategy, equations, analysis, planning, pde, task-intelligence]
 metadata:
   hermes:
@@ -24,6 +24,12 @@ updated: 2026-05-19
 ---
 
 # Competition Task Intelligence
+
+> **Part of the Exo suite** — literature (`hfpclawer`) → experiments (`expflow-pde`) → proofs
+> (`omega-architect`). Three independent CLIs that meet through **files and CLI calls**, never imports.
+> Entry skill: `exo-suite-linkage` (wiring, cost tiers **low → medium → high**, degradation ladder).
+> Install: `uv tool install hfpclawer` · `uv tool install expflow-pde` ·
+> `uv tool install "omega-architect @ git+https://github.com/diamond2nv/omega-architect@v0.2.3"`
 
 ## Overview
 
@@ -48,7 +54,8 @@ pip install expflow-pde
 
 ```bash
 uv tool install expflow-pde                  # 1) isolated CLI, `expflow` on PATH (recommended)
-uvx --from expflow-pde expflow --help        # 2) run it without installing anything
+uvx --from "expflow-pde==0.7.0" expflow --help   # pin the version: `uvx`/`uv tool run` reuse an installed tool env and can otherwise run an
+# older release; an unpinned launch is also a supply-chain (rug-pull) risk.        # 2) run it without installing anything
 uv pip install expflow-pde                   # 3) inside an existing project / venv
 pip install expflow-pde                      # 4) no uv — pip and pipx both work
 pipx install expflow-pde                     #    (pipx needs a recent version; 1.0.0 cannot parse specs)

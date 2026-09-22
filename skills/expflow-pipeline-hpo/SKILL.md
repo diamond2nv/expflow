@@ -7,7 +7,7 @@ description: >
 category: mlops
 tags: [pipeline, orchestration, hpo, pdebench, clearml]
 author: Li Shen
-version: 0.7.1
+version: 0.7.2
 metadata:
   hermes:
     tags: [mlops, pde, hpo, clearml, optuna, pipeline, competition]
@@ -16,6 +16,12 @@ metadata:
 ---
 
 # expflow PDEBench Pipeline & HPO
+
+> **Part of the Exo suite** — literature (`hfpclawer`) → experiments (`expflow-pde`) → proofs
+> (`omega-architect`). Three independent CLIs that meet through **files and CLI calls**, never imports.
+> Entry skill: `exo-suite-linkage` (wiring, cost tiers **low → medium → high**, degradation ladder).
+> Install: `uv tool install hfpclawer` · `uv tool install expflow-pde` ·
+> `uv tool install "omega-architect @ git+https://github.com/diamond2nv/omega-architect@v0.2.3"`
 
 Orchestrate experiment workflows for the AI4S PDE competition using expflow.
 Three modes for three competition phases.
@@ -40,7 +46,8 @@ pip install "expflow-pde[pipeline]"
 
 ```bash
 uv tool install expflow-pde                  # 1) isolated CLI, `expflow` on PATH (recommended)
-uvx --from expflow-pde expflow --help        # 2) run it without installing anything
+uvx --from "expflow-pde==0.7.0" expflow --help   # pin the version: `uvx`/`uv tool run` reuse an installed tool env and can otherwise run an
+# older release; an unpinned launch is also a supply-chain (rug-pull) risk.        # 2) run it without installing anything
 uv pip install expflow-pde                   # 3) inside an existing project / venv
 pip install expflow-pde                      # 4) no uv — pip and pipx both work
 pipx install expflow-pde                     #    (pipx needs a recent version; 1.0.0 cannot parse specs)
